@@ -4,17 +4,28 @@
 WINDOW_WIDTH = 400
 WINDOW_HEIGHT = 600
 FPS = 60
+HUD_WIDTH = 300
+
+# UI Colors (Lab-Grade)
+COLOR_PHOSPHOR = (57, 255, 20)      # #39FF14
+COLOR_CRT_DARK = (10, 14, 20)       # #0A0E14
+COLOR_GRID = (27, 40, 54)           # #1B2836
+COLOR_AMBER = (255, 176, 0)         # #FFB000
+COLOR_TEXT_DIM = (150, 160, 170)
+COLOR_FLY_BODY = (40, 40, 40)
+COLOR_FLY_EYE = (220, 30, 30)
+COLOR_WING = (200, 200, 200, 128)
 
 # Vision parameters
 EYE_RES = 32
 
-# Biological LIF parameters
+# Biological LIF parameters (Defaults/Baselines)
 V_REST = -70.0
 V_RESET = -75.0
 V_THRESH = -50.0
 BETA = 0.85
 REFRACTORY_PERIOD = 6
-SYNAPTIC_GAIN = 0.003 # Tuned for Pygame absolute luminance difference magnitude
+SYNAPTIC_GAIN = 0.003
 
 # Physics config
 GRAVITY = 0.8
@@ -22,3 +33,17 @@ FLAP_STRENGTH = -10.0
 PIPE_SPEED = 4
 PIPE_SPAWN_FRAMES = 80
 PIPE_GAP = 160
+
+# Genetic Algorithm Hyperparameters
+GA_POPULATION_SIZE = 30
+GA_MUTATION_RATE = 0.15
+GA_ELITE_FRACTION = 0.10
+# Genome bounds: [min, max]
+BOUND_BETA = [0.5, 0.99]
+BOUND_THRESH = [-65.0, -30.0]
+BOUND_GAIN = [0.0001, 0.05]
+BOUND_WEIGHT = [-2.0, 5.0]
+
+# Audio Config
+AUDIO_SAMPLE_RATE = 44100
+AUDIO_CLICK_MS = 12

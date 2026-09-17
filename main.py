@@ -1,204 +1,201 @@
 import argparse
 import sys
+import os
 import pygame
 import numpy as np
-import cv2
 
-from config import WINDOW_WIDTH, WINDOW_HEIGHT, FPS, V_REST, V_THRESH
-from game import FlappyGame
-from vision import preprocess_frame, compute_looming_stimulus
+from diagnostics import run_preflight_checks
+run_preflight_checks() # Run before pygame init
+
+from config import (WINDOW_WIDTH, WINDOW_HEIGHT, FPS, HUD_WIDTH,
+                    COLOR_CRT_DARK, COLOR_PHOSPHOR, COLOR_GRID, COLOR_AMBER,
+                    V_REST, V_THRESH)
+from game import FlappyWorld
+from vision import preprocess_frame, compute_looming_stimulus, get_colored_heatmap
 from connectome_lif import LoomingCircuitController
+import sound_fx
+from train_ga import train
 
-def run_headless_benchmarks(runs=10):
-    print(f"Running {runs} headless benchmark runs...")
-    # Import matplotlib only for post-run benchmarking
-    import matplotlib.pyplot as plt
-    
-    scores = []
-    survival_frames = []
-    last_brain = None
-    
-    for r in range(runs):
-        game = FlappyGame()
-        brain = LoomingCircuitController()
-        
-        prev_frame = None
-        
-        while not game.game_over:
-            # 1. Render to offscreen surface
-            surface = game.render()
-            
-            # 2. Vision processing
-            curr_frame = preprocess_frame(surface)
-            visual_current, _ = compute_looming_stimulus(curr_frame, prev_frame)
-            prev_frame = curr_frame
-            
-            # 3. Brain step
-            flap = brain.step(visual_current)
-            
-            # 4. Game physics step
-            game.step(flap)
-            
-        print(f"Run {r+1}: Score {game.score}, Frames Survived {game.frames}")
-        scores.append(game.score)
-        survival_frames.append(game.frames)
-        last_brain = brain
-        
-    print("\n--- Benchmark Results ---")
-    print(f"Average Score: {np.mean(scores):.2f}")
-    print(f"Average Frames Survived: {np.mean(survival_frames):.2f}")
-    
-    # Save a static trace of the last run's Giant Fiber voltage
-    if last_brain:
-        plt.figure(figsize=(10, 4))
-        plt.plot(last_brain.voltage_history, color='purple')
-        plt.axhline(V_THRESH, color='red', linestyle='--', label='Threshold')
-        plt.axhline(V_REST, color='gray', linestyle='--', label='Resting')
-        plt.title("Giant Fiber Membrane Potential (Last Run)")
-        plt.xlabel("Frames")
-        plt.ylabel("Voltage (mV)")
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig("gf_voltage_trace.png")
-        print("Saved gf_voltage_trace.png")
-
-def main():
-    parser = argparse.ArgumentParser(description="Fly Flappy Bird")
-    parser.add_argument("--headless", action="store_true", help="Run rapid evaluation benchmarks")
-    args = parser.parse_args()
-
-    if args.headless:
-        # Initialize pygame minimally for offscreen surface creation
-        pygame.init()
-        pygame.display.set_mode((1, 1), pygame.HIDDEN)
-        run_headless_benchmarks(runs=10)
-        pygame.quit()
-        return
-
+def run_game_loop(brain, interactive=True):
     pygame.init()
-    
-    # Main window will have game on left (WINDOW_WIDTH) and HUD on right (300px)
-    HUD_WIDTH = 300
     screen = pygame.display.set_mode((WINDOW_WIDTH + HUD_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("Fly Flappy Bird - Neural Controller")
+    pygame.display.set_caption("Neuro-Simulation Lab: Drosophila melanogaster")
     clock = pygame.time.Clock()
     
-    game = FlappyGame()
-    brain = LoomingCircuitController()
+    font = pygame.font.SysFont("Consolas", 14)
+    large_font = pygame.font.SysFont("Consolas", 18, bold=True)
+    
+    world = FlappyWorld(num_agents=1)
     
     prev_frame = None
-    font = pygame.font.SysFont("Arial", 16)
+    show_heatmap = True
+    manual_inject = False
     
     running = True
+    flap_count = 0
+    
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            # Space to restart if game over
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE and game.game_over:
-                    game.reset()
-                    brain = LoomingCircuitController()
-                    prev_frame = None
+                if event.key == pygame.K_SPACE:
+                    if world.all_dead:
+                        world.reset()
+                        brain.v = V_REST
+                        prev_frame = None
+                        flap_count = 0
+                    else:
+                        manual_inject = True
+                elif event.key == pygame.K_UP:
+                    brain.synaptic_gain *= 1.1
+                elif event.key == pygame.K_DOWN:
+                    brain.synaptic_gain /= 1.1
+                elif event.key == pygame.K_t:
+                    show_heatmap = not show_heatmap
+                elif event.key == pygame.K_m:
+                    sound_fx.synth.enabled = not sound_fx.synth.enabled
 
-        if not game.game_over:
-            # Render game state to offscreen surface
-            offscreen_surf = game.render()
-            
-            # Vision
+            if event.type == pygame.KEYUP:
+                if event.key == pygame.K_SPACE:
+                    manual_inject = False
+
+        if not world.all_dead:
+            offscreen_surf = world.render()
             curr_frame = preprocess_frame(offscreen_surf)
-            visual_current, masked_diff = compute_looming_stimulus(curr_frame, prev_frame)
+            
+            drive, masked_diff = compute_looming_stimulus(curr_frame, prev_frame, brain.spatial_weights)
             prev_frame = curr_frame
             
-            # Brain
-            flap = brain.step(visual_current)
-            
-            # Physics
-            game.step(flap)
+            # Manual injection override
+            if manual_inject:
+                drive += 50000.0
+                
+            flap = brain.step(drive)
+            if flap:
+                sound_fx.play_spike_click()
+                flap_count += 1
+                
+            world.step([flap])
         else:
-            # Just render the game as it is
-            offscreen_surf = game.render()
+            offscreen_surf = world.render()
             flap = False
+            masked_diff = np.zeros((32, 32))
             
-        # -- Drawing to main screen --
-        screen.fill((30, 30, 30)) # Dark background for HUD
-        
-        # 1. Blit game on left
+        # Rendering Main Window
+        screen.fill(COLOR_CRT_DARK)
         screen.blit(offscreen_surf, (0, 0))
         
-        # 2. Draw HUD on right
+        # Telemetry HUD
         hud_x = WINDOW_WIDTH
         
-        # Score
-        score_text = font.render(f"Score: {game.score}", True, (255, 255, 255))
-        screen.blit(score_text, (hud_x + 10, 10))
+        # Grid lines for HUD
+        for y in range(0, WINDOW_HEIGHT, 40):
+            pygame.draw.line(screen, COLOR_GRID, (hud_x, y), (hud_x + HUD_WIDTH, y))
+        for x in range(hud_x, hud_x + HUD_WIDTH, 40):
+            pygame.draw.line(screen, COLOR_GRID, (x, 0), (x, WINDOW_HEIGHT))
+            
+        pygame.draw.line(screen, COLOR_PHOSPHOR, (hud_x, 0), (hud_x, WINDOW_HEIGHT), 2)
         
-        # Game Over status
-        if game.game_over:
-            go_text = font.render("GAME OVER (Press SPACE)", True, (255, 50, 50))
-            screen.blit(go_text, (hud_x + 10, 30))
-            
-        # Flap indicator
-        if flap:
-            pygame.draw.circle(screen, (255, 0, 0), (hud_x + 250, 20), 10)
-            
-        # Draw compound eye vision (32x32 -> upscale to 128x128 for visibility)
-        if prev_frame is not None:
-            # Prepare masked_diff for display
-            disp_eye = masked_diff.copy()
-            max_val = np.max(disp_eye)
-            if max_val > 0:
-                disp_eye = (disp_eye / max_val * 255).astype(np.uint8)
-            else:
-                disp_eye = disp_eye.astype(np.uint8)
-                
-            # Create RGB by repeating gray channel
-            eye_rgb = np.stack((disp_eye, disp_eye, disp_eye), axis=-1)
-            # transpose for Pygame (width, height, color)
-            eye_rgb = np.transpose(eye_rgb, (1, 0, 2))
-            
-            eye_surf = pygame.surfarray.make_surface(eye_rgb)
-            eye_surf = pygame.transform.scale(eye_surf, (128, 128))
-            screen.blit(eye_surf, (hud_x + 10, 60))
-            
-            label = font.render("LPLC2 Receptive Field", True, (200, 200, 200))
-            screen.blit(label, (hud_x + 10, 195))
-            
-        # Draw GF Membrane Potential Graph using native pygame line drawing
-        hist = brain.voltage_history[-150:] # Display last 150 frames
-        graph_rect = pygame.Rect(hud_x + 10, 250, 270, 100)
-        pygame.draw.rect(screen, (0, 0, 0), graph_rect)
-        pygame.draw.rect(screen, (255, 255, 255), graph_rect, 1) # Border
+        # Text Metrics
+        agent = world.agents[0]
+        texts = [
+            f"SYSTEM: ACTIVE",
+            f"FITNESS: {agent.frames_survived + agent.score * 500}",
+            f"PIPES CLEARED: {agent.score}",
+            f"SYNAPTIC GAIN: {brain.synaptic_gain:.4f}",
+            f"SPIKE COUNT: {flap_count}",
+            f"SOUND: {'ON' if sound_fx.synth.enabled else 'MUTED'}"
+        ]
         
-        # Title
-        gf_label = font.render("Giant Fiber Potential (mV)", True, (200, 200, 200))
-        screen.blit(gf_label, (hud_x + 10, 230))
+        for i, t in enumerate(texts):
+            color = COLOR_PHOSPHOR if i != 0 else COLOR_AMBER
+            surf = font.render(t, True, color)
+            screen.blit(surf, (hud_x + 10, 10 + i * 20))
+            
+        if world.all_dead:
+            go_text = large_font.render("AGENT TERMINATED - PRESS SPACE", True, (255, 50, 50))
+            screen.blit(go_text, (hud_x + 10, 150))
+            
+        # Spike Indicator
+        pygame.draw.circle(screen, COLOR_AMBER if flap else (30, 30, 30), (hud_x + 270, 20), 8)
         
-        # Scaling for graph
-        min_v = -80
-        max_v = -40
+        # Thermal Compound Eye Feed
+        if show_heatmap and prev_frame is not None:
+            heatmap_rgb = get_colored_heatmap(masked_diff)
+            eye_surf = pygame.surfarray.make_surface(heatmap_rgb)
+            eye_surf = pygame.transform.scale(eye_surf, (150, 150))
+            screen.blit(eye_surf, (hud_x + 10, 200))
+            
+            label = font.render("LPLC2 RECEPTIVE FIELD", True, COLOR_PHOSPHOR)
+            screen.blit(label, (hud_x + 10, 355))
+            
+        # Oscilloscope Voltage Trace
+        hist = brain.voltage_history[-150:]
+        graph_rect = pygame.Rect(hud_x + 10, 420, 270, 120)
+        pygame.draw.rect(screen, COLOR_GRID, graph_rect)
+        pygame.draw.rect(screen, COLOR_PHOSPHOR, graph_rect, 1)
+        
+        v_label = font.render(f"GF VOLTAGE (Vm): {brain.v:.1f}mV", True, COLOR_PHOSPHOR)
+        screen.blit(v_label, (hud_x + 10, 400))
+        
+        min_v, max_v = -80.0, -40.0
         v_range = max_v - min_v
         
         if len(hist) > 1:
             pts = []
             for i, v in enumerate(hist):
                 x = graph_rect.x + (i / 150) * graph_rect.width
-                # map v to y
                 y = graph_rect.y + graph_rect.height - ((v - min_v) / v_range) * graph_rect.height
                 pts.append((float(x), float(y)))
                 
-            pygame.draw.lines(screen, (150, 50, 255), False, pts, 2)
+            # Draw glow
+            pygame.draw.lines(screen, (10, 150, 10), False, pts, 4)
+            pygame.draw.lines(screen, COLOR_PHOSPHOR, False, pts, 1)
             
-        # Draw threshold line
-        thresh_y = graph_rect.y + graph_rect.height - ((V_THRESH - min_v) / v_range) * graph_rect.height
-        pygame.draw.line(screen, (255, 50, 50), (graph_rect.x, thresh_y), (graph_rect.x + graph_rect.width, thresh_y), 1)
+        # Threshold line
+        thresh_y = graph_rect.y + graph_rect.height - ((brain.v_thresh - min_v) / v_range) * graph_rect.height
+        pygame.draw.line(screen, COLOR_AMBER, (graph_rect.x, thresh_y), (graph_rect.x + graph_rect.width, thresh_y), 1)
 
         pygame.display.flip()
-        # Cap framerate in GUI mode
         clock.tick(FPS)
 
     pygame.quit()
-    sys.exit()
+
+def main():
+    parser = argparse.ArgumentParser(description="Neuroevolution Drosophila Flappy Bird")
+    parser.add_argument("--play", action="store_true", help="Play mode with best genome")
+    parser.add_argument("--train", action="store_true", help="Train using genetic algorithm")
+    parser.add_argument("--generations", type=int, default=10, help="Number of generations to train")
+    parser.add_argument("--load", type=str, help="Load genome from .npy file")
+    parser.add_argument("--mute", action="store_true", help="Disable procedural audio")
+    
+    args = parser.parse_args()
+    
+    if args.mute:
+        sound_fx.synth.enabled = False
+
+    if args.train:
+        train(generations=args.generations)
+        return
+
+    brain = LoomingCircuitController()
+    if args.load:
+        if os.path.exists(args.load):
+            genome = np.load(args.load)
+            brain.set_genome(genome)
+            print(f"Loaded genome from {args.load}")
+        else:
+            print(f"Genome file {args.load} not found, using baseline.")
+    elif args.play:
+        if os.path.exists("best_fly_genome.npy"):
+            genome = np.load("best_fly_genome.npy")
+            brain.set_genome(genome)
+            print("Loaded best_fly_genome.npy")
+        else:
+            print("best_fly_genome.npy not found. Run --train first! Using baseline.")
+            
+    run_game_loop(brain)
 
 if __name__ == "__main__":
     main()
