@@ -1,93 +1,163 @@
-import argparse
 import sys
 import os
 import pygame
 import numpy as np
+import random
 
-from diagnostics import run_preflight_checks
-run_preflight_checks() # Run before pygame init
+from diagnostics import run_preflight_checks, validate_frame_tensor
+run_preflight_checks() 
 
-from config import (WINDOW_WIDTH, WINDOW_HEIGHT, FPS, HUD_WIDTH,
-                    COLOR_CRT_DARK, COLOR_PHOSPHOR, COLOR_GRID, COLOR_AMBER,
-                    V_REST, V_THRESH)
-from game import FlappyWorld
+from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, FPS,
+                    COLOR_PANEL, COLOR_PHOSPHOR, COLOR_GRID, COLOR_LEADER, COLOR_TEXT, COLOR_ACCENT,
+                    GA_POPULATION_SIZE, GA_ELITE_COUNT, GA_MUTATION_RATE, GA_MUTATION_SCALE,
+                    EYE_RES)
+from game import SwarmWorld
 from vision import preprocess_frame, compute_looming_stimulus, get_colored_heatmap
 from connectome_lif import LoomingCircuitController
 import sound_fx
-from train_ga import train
 
-def run_game_loop(brain, interactive=True):
+def initialize_population(size):
+    pop = []
+    for _ in range(size):
+        brain = LoomingCircuitController()
+        # Initial random mutation
+        brain.mutate(1.0, 0.5)
+        pop.append(brain)
+    return pop
+
+def run_simulation():
     pygame.init()
-    screen = pygame.display.set_mode((WINDOW_WIDTH + HUD_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("Neuro-Simulation Lab: Drosophila melanogaster")
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    pygame.display.set_caption("Neuro-Simulation Lab: Swarm Evolution")
     clock = pygame.time.Clock()
     
     font = pygame.font.SysFont("Consolas", 14)
     large_font = pygame.font.SysFont("Consolas", 18, bold=True)
     
-    world = FlappyWorld(num_agents=1)
+    population = initialize_population(GA_POPULATION_SIZE)
+    world = SwarmWorld(population)
+    prev_frames = [None] * GA_POPULATION_SIZE
     
-    prev_frame = None
-    show_heatmap = True
-    manual_inject = False
+    generation = 1
+    max_fitness_history = []
+    all_time_record = 0
+    best_overall_genome = None
     
     running = True
-    flap_count = 0
+    paused = False
+    
+    # Speed multiplier (1, 2, 5, 15)
+    speed_multiplier = 1
     
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
-                    if world.all_dead:
-                        world.reset()
-                        brain.v = V_REST
-                        prev_frame = None
-                        flap_count = 0
-                    else:
-                        manual_inject = True
-                elif event.key == pygame.K_UP:
-                    brain.synaptic_gain *= 1.1
-                elif event.key == pygame.K_DOWN:
-                    brain.synaptic_gain /= 1.1
-                elif event.key == pygame.K_t:
-                    show_heatmap = not show_heatmap
-                elif event.key == pygame.K_m:
-                    sound_fx.synth.enabled = not sound_fx.synth.enabled
+                if event.key == pygame.K_1:
+                    speed_multiplier = 1
+                elif event.key == pygame.K_2:
+                    speed_multiplier = 2
+                elif event.key == pygame.K_5:
+                    speed_multiplier = 5
+                elif event.key in (pygame.K_0, pygame.K_f):
+                    speed_multiplier = 15
+                elif event.key == pygame.K_p:
+                    paused = not paused
+                elif event.key == pygame.K_s:
+                    if best_overall_genome is not None:
+                        np.save("best_fly_genome.npy", best_overall_genome)
+                        print("Saved best genome.")
+                elif event.key == pygame.K_r:
+                    population = initialize_population(GA_POPULATION_SIZE)
+                    world = SwarmWorld(population)
+                    prev_frames = [None] * GA_POPULATION_SIZE
+                    generation = 1
+                    max_fitness_history = []
+                    all_time_record = 0
 
-            if event.type == pygame.KEYUP:
-                if event.key == pygame.K_SPACE:
-                    manual_inject = False
-
-        if not world.all_dead:
-            offscreen_surf = world.render()
-            curr_frame = preprocess_frame(offscreen_surf)
-            
-            drive, masked_diff = compute_looming_stimulus(curr_frame, prev_frame, brain.spatial_weights)
-            prev_frame = curr_frame
-            
-            # Manual injection override
-            if manual_inject:
-                drive += 50000.0
+        if not paused:
+            for substep in range(speed_multiplier):
+                if world.all_dead:
+                    # Evolution step
+                    agents = world.agents
+                    
+                    # Update records
+                    best_agent = max(agents, key=lambda a: a.get_fitness())
+                    gen_max_fitness = best_agent.get_fitness()
+                    max_fitness_history.append(gen_max_fitness)
+                    
+                    if gen_max_fitness > all_time_record:
+                        all_time_record = gen_max_fitness
+                        best_overall_genome = best_agent.brain.get_genome()
+                        
+                    print(f"Gen {generation} | Max Fit: {gen_max_fitness} | Avg Fit: {np.mean([a.get_fitness() for a in agents]):.1f}")
+                    
+                    # Sort agents by fitness descending
+                    agents.sort(key=lambda a: a.get_fitness(), reverse=True)
+                    
+                    next_population = []
+                    # Elitism
+                    for i in range(GA_ELITE_COUNT):
+                        next_population.append(agents[i].brain.clone())
+                        
+                    # Tournament selection and mutation
+                    while len(next_population) < GA_POPULATION_SIZE:
+                        # Tournament size 3
+                        tourney = random.sample(agents, 3)
+                        winner = max(tourney, key=lambda a: a.get_fitness())
+                        child = winner.brain.clone()
+                        child.mutate(GA_MUTATION_RATE, GA_MUTATION_SCALE)
+                        next_population.append(child)
+                        
+                    population = next_population
+                    world = SwarmWorld(population)
+                    prev_frames = [None] * GA_POPULATION_SIZE
+                    generation += 1
+                    break # Break out of substeps to render the new generation
                 
-            flap = brain.step(drive)
-            if flap:
-                sound_fx.play_spike_click()
-                flap_count += 1
+                # Physics and vision update
+                offscreen_surf = world.render()
+                curr_frame = preprocess_frame(offscreen_surf)
+                try:
+                    validate_frame_tensor(curr_frame, (EYE_RES, EYE_RES))
+                except Exception as e:
+                    print(e)
+                    
+                flaps = []
+                leader = world.get_leader()
+                leader_idx = world.agents.index(leader) if leader else -1
                 
-            world.step([flap])
-        else:
-            offscreen_surf = world.render()
-            flap = False
-            masked_diff = np.zeros((32, 32))
-            
-        # Rendering Main Window
-        screen.fill(COLOR_CRT_DARK)
+                masked_diff_leader = np.zeros((EYE_RES, EYE_RES))
+                
+                for i, agent in enumerate(world.agents):
+                    if not agent.alive:
+                        flaps.append(False)
+                        continue
+                        
+                    drive, masked_diff = compute_looming_stimulus(curr_frame, prev_frames[i], agent.brain.spatial_weights)
+                    prev_frames[i] = curr_frame
+                    
+                    if i == leader_idx:
+                        masked_diff_leader = masked_diff
+                        
+                    flap = agent.brain.step(drive)
+                    flaps.append(flap)
+                    
+                    # Optional: play click for leader
+                    if flap and i == leader_idx:
+                        sound_fx.play_spike_click()
+                        
+                world.step(flaps)
+                
+        # Rendering
+        screen.fill(COLOR_PANEL)
+        
+        offscreen_surf = world.render()
         screen.blit(offscreen_surf, (0, 0))
         
-        # Telemetry HUD
-        hud_x = WINDOW_WIDTH
+        # HUD Panel (Right side)
+        hud_x = ARENA_WIDTH
         
         # Grid lines for HUD
         for y in range(0, WINDOW_HEIGHT, 40):
@@ -95,107 +165,86 @@ def run_game_loop(brain, interactive=True):
         for x in range(hud_x, hud_x + HUD_WIDTH, 40):
             pygame.draw.line(screen, COLOR_GRID, (x, 0), (x, WINDOW_HEIGHT))
             
-        pygame.draw.line(screen, COLOR_PHOSPHOR, (hud_x, 0), (hud_x, WINDOW_HEIGHT), 2)
+        pygame.draw.line(screen, COLOR_ACCENT, (hud_x, 0), (hud_x, WINDOW_HEIGHT), 3)
         
-        # Text Metrics
-        agent = world.agents[0]
+        alive_count = sum(1 for a in world.agents if a.alive)
+        leader = world.get_leader()
+        current_score = leader.get_fitness() if leader else 0
+        
         texts = [
-            f"SYSTEM: ACTIVE",
-            f"FITNESS: {agent.frames_survived + agent.score * 500}",
-            f"PIPES CLEARED: {agent.score}",
-            f"SYNAPTIC GAIN: {brain.synaptic_gain:.4f}",
-            f"SPIKE COUNT: {flap_count}",
-            f"SOUND: {'ON' if sound_fx.synth.enabled else 'MUTED'}"
+            f"GENERATION: {generation}",
+            f"ALIVE: {alive_count} / {GA_POPULATION_SIZE}",
+            f"CURRENT FITNESS: {current_score}",
+            f"ALL-TIME RECORD: {all_time_record}",
+            f"SIM SPEED: {speed_multiplier}X {'(PAUSED)' if paused else ''}"
         ]
         
         for i, t in enumerate(texts):
-            color = COLOR_PHOSPHOR if i != 0 else COLOR_AMBER
+            color = COLOR_PHOSPHOR if i == 0 else COLOR_TEXT
             surf = font.render(t, True, color)
-            screen.blit(surf, (hud_x + 10, 10 + i * 20))
+            screen.blit(surf, (hud_x + 10, 10 + i * 25))
             
-        if world.all_dead:
-            go_text = large_font.render("AGENT TERMINATED - PRESS SPACE", True, (255, 50, 50))
-            screen.blit(go_text, (hud_x + 10, 150))
-            
-        # Spike Indicator
-        pygame.draw.circle(screen, COLOR_AMBER if flap else (30, 30, 30), (hud_x + 270, 20), 8)
+        # Fitness Graph
+        graph_rect = pygame.Rect(hud_x + 10, 150, 420, 100)
+        pygame.draw.rect(screen, (0, 0, 0), graph_rect)
+        pygame.draw.rect(screen, COLOR_GRID, graph_rect, 1)
         
-        # Thermal Compound Eye Feed
-        if show_heatmap and prev_frame is not None:
-            heatmap_rgb = get_colored_heatmap(masked_diff)
+        g_label = font.render("FITNESS HISTORY", True, COLOR_TEXT)
+        screen.blit(g_label, (hud_x + 10, 130))
+        
+        if len(max_fitness_history) > 1:
+            pts = []
+            max_val = max(100, max(max_fitness_history))
+            min_val = min(max_fitness_history)
+            val_range = max(1, max_val - min_val)
+            
+            for i, val in enumerate(max_fitness_history):
+                x = graph_rect.x + (i / max(1, len(max_fitness_history) - 1)) * graph_rect.width
+                y = graph_rect.y + graph_rect.height - ((val - min_val) / val_range) * graph_rect.height
+                pts.append((x, y))
+                
+            pygame.draw.lines(screen, COLOR_ACCENT, False, pts, 2)
+            
+        # Leader Brain View
+        lb_label = font.render("LEADER COMPOUND EYE (LPLC2)", True, COLOR_TEXT)
+        screen.blit(lb_label, (hud_x + 10, 270))
+        
+        if leader:
+            heatmap_rgb = get_colored_heatmap(masked_diff_leader)
             eye_surf = pygame.surfarray.make_surface(heatmap_rgb)
             eye_surf = pygame.transform.scale(eye_surf, (150, 150))
-            screen.blit(eye_surf, (hud_x + 10, 200))
+            screen.blit(eye_surf, (hud_x + 10, 290))
             
-            label = font.render("LPLC2 RECEPTIVE FIELD", True, COLOR_PHOSPHOR)
-            screen.blit(label, (hud_x + 10, 355))
+        # Giant Fiber Oscilloscope
+        osc_label = font.render("GIANT FIBER VOLTAGE (Vm)", True, COLOR_TEXT)
+        screen.blit(osc_label, (hud_x + 10, 460))
+        
+        osc_rect = pygame.Rect(hud_x + 10, 480, 420, 100)
+        pygame.draw.rect(screen, (0, 0, 0), osc_rect)
+        pygame.draw.rect(screen, COLOR_GRID, osc_rect, 1)
+        
+        if leader:
+            hist = leader.brain.voltage_history[-200:]
+            min_v, max_v = -80.0, -40.0
+            v_range = max_v - min_v
             
-        # Oscilloscope Voltage Trace
-        hist = brain.voltage_history[-150:]
-        graph_rect = pygame.Rect(hud_x + 10, 420, 270, 120)
-        pygame.draw.rect(screen, COLOR_GRID, graph_rect)
-        pygame.draw.rect(screen, COLOR_PHOSPHOR, graph_rect, 1)
-        
-        v_label = font.render(f"GF VOLTAGE (Vm): {brain.v:.1f}mV", True, COLOR_PHOSPHOR)
-        screen.blit(v_label, (hud_x + 10, 400))
-        
-        min_v, max_v = -80.0, -40.0
-        v_range = max_v - min_v
-        
-        if len(hist) > 1:
-            pts = []
-            for i, v in enumerate(hist):
-                x = graph_rect.x + (i / 150) * graph_rect.width
-                y = graph_rect.y + graph_rect.height - ((v - min_v) / v_range) * graph_rect.height
-                pts.append((float(x), float(y)))
+            if len(hist) > 1:
+                pts = []
+                for i, v in enumerate(hist):
+                    x = osc_rect.x + (i / 200) * osc_rect.width
+                    y = osc_rect.y + osc_rect.height - ((v - min_v) / v_range) * osc_rect.height
+                    pts.append((x, y))
+                    
+                pygame.draw.lines(screen, (10, 150, 10), False, pts, 4)
+                pygame.draw.lines(screen, COLOR_PHOSPHOR, False, pts, 1)
                 
-            # Draw glow
-            pygame.draw.lines(screen, (10, 150, 10), False, pts, 4)
-            pygame.draw.lines(screen, COLOR_PHOSPHOR, False, pts, 1)
-            
-        # Threshold line
-        thresh_y = graph_rect.y + graph_rect.height - ((brain.v_thresh - min_v) / v_range) * graph_rect.height
-        pygame.draw.line(screen, COLOR_AMBER, (graph_rect.x, thresh_y), (graph_rect.x + graph_rect.width, thresh_y), 1)
+            thresh_y = osc_rect.y + osc_rect.height - ((leader.brain.v_thresh - min_v) / v_range) * osc_rect.height
+            pygame.draw.line(screen, COLOR_LEADER, (osc_rect.x, thresh_y), (osc_rect.x + osc_rect.width, thresh_y), 1)
 
         pygame.display.flip()
         clock.tick(FPS)
 
     pygame.quit()
 
-def main():
-    parser = argparse.ArgumentParser(description="Neuroevolution Drosophila Flappy Bird")
-    parser.add_argument("--play", action="store_true", help="Play mode with best genome")
-    parser.add_argument("--train", action="store_true", help="Train using genetic algorithm")
-    parser.add_argument("--generations", type=int, default=10, help="Number of generations to train")
-    parser.add_argument("--load", type=str, help="Load genome from .npy file")
-    parser.add_argument("--mute", action="store_true", help="Disable procedural audio")
-    
-    args = parser.parse_args()
-    
-    if args.mute:
-        sound_fx.synth.enabled = False
-
-    if args.train:
-        train(generations=args.generations)
-        return
-
-    brain = LoomingCircuitController()
-    if args.load:
-        if os.path.exists(args.load):
-            genome = np.load(args.load)
-            brain.set_genome(genome)
-            print(f"Loaded genome from {args.load}")
-        else:
-            print(f"Genome file {args.load} not found, using baseline.")
-    elif args.play:
-        if os.path.exists("best_fly_genome.npy"):
-            genome = np.load("best_fly_genome.npy")
-            brain.set_genome(genome)
-            print("Loaded best_fly_genome.npy")
-        else:
-            print("best_fly_genome.npy not found. Run --train first! Using baseline.")
-            
-    run_game_loop(brain)
-
 if __name__ == "__main__":
-    main()
+    run_simulation()

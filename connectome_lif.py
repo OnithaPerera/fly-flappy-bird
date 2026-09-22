@@ -1,5 +1,6 @@
 import numpy as np
-from config import V_REST, V_RESET, V_THRESH, BETA, REFRACTORY_PERIOD, SYNAPTIC_GAIN, EYE_RES
+from config import (V_REST, V_RESET, V_THRESH, BETA, REFRACTORY_PERIOD, SYNAPTIC_GAIN, EYE_RES,
+                    BOUND_BETA, BOUND_THRESH, BOUND_GAIN, BOUND_WEIGHT)
 
 class LoomingCircuitController:
     def __init__(self, genome=None):
@@ -39,6 +40,33 @@ class LoomingCircuitController:
         self.v_thresh = genome[1]
         self.synaptic_gain = genome[2]
         self.spatial_weights = genome[3:].reshape((EYE_RES, EYE_RES))
+
+    def clone(self):
+        """Returns a new instance with an identical genome."""
+        return LoomingCircuitController(genome=self.get_genome())
+
+    def mutate(self, rate, scale):
+        """Mutates the genome in place."""
+        genome = self.get_genome()
+        for i in range(len(genome)):
+            if np.random.rand() < rate:
+                genome[i] += np.random.normal(0, scale)
+                
+        # Enforce bounds
+        genome[0] = np.clip(genome[0], BOUND_BETA[0], BOUND_BETA[1])
+        genome[1] = np.clip(genome[1], BOUND_THRESH[0], BOUND_THRESH[1])
+        genome[2] = np.clip(genome[2], BOUND_GAIN[0], BOUND_GAIN[1])
+        genome[3:] = np.clip(genome[3:], BOUND_WEIGHT[0], BOUND_WEIGHT[1])
+        
+        self.set_genome(genome)
+
+    def crossover(self, partner):
+        """Returns a new child produced by uniform crossover."""
+        p1 = self.get_genome()
+        p2 = partner.get_genome()
+        mask = np.random.rand(len(p1)) > 0.5
+        child_genome = np.where(mask, p1, p2)
+        return LoomingCircuitController(genome=child_genome)
         
     def load_flywire_weights(self, token):
         print(f"FlyWire Connectome hook called with token {token[:5]}... (stub).")
