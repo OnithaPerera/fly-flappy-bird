@@ -154,7 +154,7 @@ class SwarmWorld:
         self.all_dead = False
         
         # Spawn first pipe early
-        self.pipes.append(PipePair(360, self.assets["pipe"], self.ground_h))
+        self.pipes.append(PipePair(260, self.assets["pipe"], self.ground_h))
 
     def get_leader(self):
         alive_agents = [a for a in self.agents if a.alive]

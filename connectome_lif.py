@@ -105,12 +105,18 @@ class BatchedPooledBiologicalLIF:
         # Net current
         I_net = I_ventral + I_dorsal + self.I_tonic
         
-        # Ground proximity avoidance supplemental current (y > 380)
-        near_floor_mask = y_positions_N > 380
-        I_net[near_floor_mask] += self.ground_gain[near_floor_mask]
+        # Altitude Recovery Reflex (y > 250 and falling vel > 1.0)
+        falling_mask = (y_positions_N > 250.0) & (velocities_N > 1.0)
+        # We need a shape (N, 1) to match I_net
+        I_altitude = np.maximum(0.0, (y_positions_N[falling_mask] - 250.0) / 70.0) * 1.8
+        I_net[falling_mask, 0] += I_altitude
         
         # Update membrane potential
         self.gf_v[active_mask] = (self.gf_v[active_mask] - V_REST) * self.beta[active_mask] + V_REST + I_net[active_mask]
+        
+        # Ceiling Lockdown
+        ceiling_mask = (y_positions_N < 120.0)
+        self.gf_v[ceiling_mask, 0] = np.minimum(self.gf_v[ceiling_mask, 0], -65.0)
         
         self.voltage_history.append(self.gf_v.copy())
         

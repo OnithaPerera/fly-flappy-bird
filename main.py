@@ -165,7 +165,7 @@ def run_simulation():
                         prev_frames = [None] * GA_POPULATION_SIZE
                         break
                     else:
-                        avg_fitnesses = np.min(agent_scores_per_seed, axis=1) # dual-seed min fitness
+                        avg_fitnesses = np.mean(agent_scores_per_seed, axis=1) # dual-seed blended average
                         best_idx = int(np.argmax(avg_fitnesses))
                         gen_max_fitness = avg_fitnesses[best_idx]
                         max_fitness_history.append(gen_max_fitness)
