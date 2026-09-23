@@ -13,21 +13,19 @@ run_preflight_checks()
 from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, FPS,
                     COLOR_PANEL, COLOR_PHOSPHOR, COLOR_GRID, COLOR_LEADER, COLOR_TEXT, COLOR_ACCENT,
                     GA_POPULATION_SIZE, GA_ELITE_COUNT, INITIAL_MUT_RATE, MIN_MUT_RATE, INITIAL_MUT_SCALE, MIN_MUT_SCALE, DECAY_RATE,
-                    EYE_RES, EVAL_SEEDS)
+                    EYE_RES, EVAL_SEEDS, TOTAL_GENOME_SIZE, BOUND_BETA, BOUND_THRESH)
 from game import SwarmWorld
-from vision import preprocess_frame, compute_stabilized_looming, get_colored_heatmap
-from connectome_lif import RecurrentConnectomeLIF
+from vision import get_sensory_vector, get_colored_heatmap
+from connectome_lif import BatchedRecurrentSNN
 from assets_loader import load_or_fetch_assets
 import sound_fx
 
-def initialize_population(size):
-    pop = []
-    for _ in range(size):
-        brain = RecurrentConnectomeLIF()
-        # Initial random mutation
-        brain.mutate(1.0, 0.5)
-        pop.append(brain)
-    return pop
+def generate_random_genome():
+    genome = np.zeros(TOTAL_GENOME_SIZE, dtype=np.float32)
+    genome[0] = np.random.uniform(BOUND_BETA[0], BOUND_BETA[1])
+    genome[1] = np.random.uniform(BOUND_THRESH[0], BOUND_THRESH[1])
+    genome[2:] = np.random.normal(0, 0.01, TOTAL_GENOME_SIZE - 2)
+    return genome
 
 def run_simulation():
     pygame.init()
@@ -44,12 +42,29 @@ def run_simulation():
         print(f"Critical error loading assets: {e}")
         sys.exit(1)
         
-    population = initialize_population(GA_POPULATION_SIZE)
-    world = SwarmWorld(population, assets)
+    batched_snn = BatchedRecurrentSNN(GA_POPULATION_SIZE)
+    initial_genomes = [generate_random_genome() for _ in range(GA_POPULATION_SIZE)]
+    
+    if os.path.exists("champion_genome.npy"):
+        try:
+            champ = np.load("champion_genome.npy")
+            if len(champ) == TOTAL_GENOME_SIZE:
+                initial_genomes[0] = champ
+                print("Loaded valid champion genome.")
+            else:
+                os.rename("champion_genome.npy", "champion_genome_legacy.npy")
+                print("Warning: Legacy checkpoint shape mismatch. Renamed to champion_genome_legacy.npy.")
+        except Exception as e:
+            print(f"Failed to load checkpoint: {e}")
+            
+    batched_snn.set_genomes(initial_genomes)
+    
+    world = SwarmWorld(batched_snn.genomes, assets)
     
     current_eval_idx = 0
     current_seed = EVAL_SEEDS[current_eval_idx]
     world.reset(current_seed)
+    batched_snn.reset_states()
     
     prev_frames = [None] * GA_POPULATION_SIZE
     
@@ -57,10 +72,10 @@ def run_simulation():
     max_fitness_history = []
     all_time_record = 0
     all_time_record_seed = current_seed
-    all_time_action_tape = []
+    all_time_action_tape = set()
     best_overall_genome = None
     
-    agent_total_fitness = [0] * GA_POPULATION_SIZE
+    agent_total_fitness = np.zeros(GA_POPULATION_SIZE, dtype=np.float32)
     best_run_tapes = [None] * GA_POPULATION_SIZE
     best_run_seeds = [None] * GA_POPULATION_SIZE
     best_run_scores = [-1] * GA_POPULATION_SIZE
@@ -68,7 +83,6 @@ def run_simulation():
     running = True
     paused = False
     replay_mode = False
-    replay_frame_idx = 0
     
     # Speed multiplier (1, 2, 5, 15)
     speed_multiplier = 1
@@ -89,16 +103,16 @@ def run_simulation():
                 elif event.key == pygame.K_p:
                     paused = not paused
                 elif event.key == pygame.K_r:
-                    # Toggle replay mode
                     replay_mode = not replay_mode
                     if replay_mode:
                         if best_overall_genome is not None:
                             print(f"Entering Replay Mode for seed {all_time_record_seed}")
-                            replay_brain = RecurrentConnectomeLIF(genome=best_overall_genome)
-                            world = SwarmWorld([replay_brain], assets)
+                            batched_snn = BatchedRecurrentSNN(1)
+                            batched_snn.set_genomes([best_overall_genome])
+                            batched_snn.reset_states()
+                            world = SwarmWorld(batched_snn.genomes, assets)
                             world.reset(all_time_record_seed)
                             prev_frames = [None]
-                            replay_frame_idx = 0
                             paused = False
                             speed_multiplier = 1
                         else:
@@ -106,23 +120,25 @@ def run_simulation():
                             replay_mode = False
                     else:
                         print("Exiting Replay Mode. Resuming evolution...")
-                        world = SwarmWorld(population, assets)
+                        batched_snn = BatchedRecurrentSNN(GA_POPULATION_SIZE)
+                        batched_snn.set_genomes(initial_genomes)
+                        batched_snn.reset_states()
+                        world = SwarmWorld(batched_snn.genomes, assets)
                         world.reset(current_seed)
                         prev_frames = [None] * GA_POPULATION_SIZE
                         paused = False
                 elif event.key == pygame.K_s:
                     if best_overall_genome is not None:
-                        np.save("best_fly_genome.npy", best_overall_genome)
-                        print("Saved best genome.")
+                        np.save("champion_genome.npy", best_overall_genome)
+                        print("Saved champion genome.")
 
         if not paused:
             for substep in range(speed_multiplier):
                 if world.all_dead:
                     if replay_mode:
-                        # In replay mode, just loop the replay
                         world.reset(all_time_record_seed)
+                        batched_snn.reset_states()
                         prev_frames = [None]
-                        replay_frame_idx = 0
                         break
                         
                     # Evolution step
@@ -131,20 +147,19 @@ def run_simulation():
                         agent_total_fitness[i] += fit
                         if fit > best_run_scores[i]:
                             best_run_scores[i] = fit
-                            best_run_tapes[i] = a.action_tape.copy()
+                            best_run_tapes[i] = set(a.action_tape)
                             best_run_seeds[i] = current_seed
                             
                     current_eval_idx += 1
                     
                     if current_eval_idx < len(EVAL_SEEDS):
                         current_seed = EVAL_SEEDS[current_eval_idx]
-                        world = SwarmWorld(population, assets)
                         world.reset(current_seed)
+                        batched_snn.reset_states()
                         prev_frames = [None] * GA_POPULATION_SIZE
                         break
                     else:
-                        # End of generation
-                        avg_fitnesses = [f / len(EVAL_SEEDS) for f in agent_total_fitness]
+                        avg_fitnesses = agent_total_fitness / len(EVAL_SEEDS)
                         best_idx = int(np.argmax(avg_fitnesses))
                         gen_max_fitness = avg_fitnesses[best_idx]
                         max_fitness_history.append(gen_max_fitness)
@@ -153,99 +168,76 @@ def run_simulation():
                             all_time_record = gen_max_fitness
                             all_time_record_seed = best_run_seeds[best_idx]
                             all_time_action_tape = best_run_tapes[best_idx]
-                            best_overall_genome = population[best_idx].get_genome()
+                            best_overall_genome = batched_snn.genomes[best_idx].copy()
                             print(f"New All-Time Record: {all_time_record:.1f} (Seed: {all_time_record_seed})")
                             
                         print(f"Gen {generation} | Max Fit: {gen_max_fitness:.1f} | Avg Fit: {np.mean(avg_fitnesses):.1f}")
                         
-                        # Sort indices by fitness descending
                         sorted_indices = np.argsort(avg_fitnesses)[::-1]
+                        elite_indices = sorted_indices[:GA_ELITE_COUNT]
                         
-                        next_population = []
-                        # Elitism
-                        for i in range(GA_ELITE_COUNT):
-                            next_population.append(population[sorted_indices[i]].clone())
-                            
                         mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
                         mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
                             
-                        # Tournament selection
-                        while len(next_population) < GA_POPULATION_SIZE:
-                            tourney_indices = random.sample(range(GA_POPULATION_SIZE), 3)
-                            winner_idx = max(tourney_indices, key=lambda idx: avg_fitnesses[idx])
-                            child = population[winner_idx].clone()
-                            child.mutate(mut_rate, mut_scale)
-                            next_population.append(child)
-                            
-                        population = next_population
+                        batched_snn.reproduce_and_mutate(elite_indices, avg_fitnesses, mut_rate, mut_scale)
+                        
+                        initial_genomes = [batched_snn.genomes[i].copy() for i in range(GA_POPULATION_SIZE)]
+                        
                         generation += 1
                         current_eval_idx = 0
                         current_seed = EVAL_SEEDS[current_eval_idx]
                         
-                        agent_total_fitness = [0] * GA_POPULATION_SIZE
+                        agent_total_fitness.fill(0)
                         best_run_tapes = [None] * GA_POPULATION_SIZE
                         best_run_seeds = [None] * GA_POPULATION_SIZE
                         best_run_scores = [-1] * GA_POPULATION_SIZE
                         
-                        world = SwarmWorld(population, assets)
+                        world = SwarmWorld(batched_snn.genomes, assets)
                         world.reset(current_seed)
+                        batched_snn.reset_states()
                         prev_frames = [None] * GA_POPULATION_SIZE
-                        break # Break out of substeps to render the new generation
+                        break 
                 
-                # Physics and vision update
                 offscreen_surf = world.render()
-                curr_frame = preprocess_frame(offscreen_surf)
-                try:
-                    validate_frame_tensor(curr_frame, (EYE_RES, EYE_RES))
-                except Exception as e:
-                    print(e)
-                    
-                flaps = []
+                
+                N_active = len(world.agents)
+                inputs = np.zeros((N_active, 1024), dtype=np.float32)
+                velocities = np.zeros(N_active, dtype=np.float32)
+                
                 leader = world.get_leader()
                 leader_idx = world.agents.index(leader) if leader else -1
-                
                 masked_diff_leader = np.zeros((EYE_RES, EYE_RES))
                 
                 for i, agent in enumerate(world.agents):
                     if not agent.alive:
-                        flaps.append(False)
                         continue
                         
-                    drive = compute_stabilized_looming(curr_frame, prev_frames[i], agent.velocity)
+                    diff_tensor, curr_frame = get_sensory_vector(offscreen_surf, agent.rect, prev_frames[i], agent.velocity)
                     prev_frames[i] = curr_frame
+                    inputs[i] = diff_tensor
+                    velocities[i] = agent.velocity
                     
                     if i == leader_idx:
-                        masked_diff_leader = drive.reshape(32, 32)
+                        masked_diff_leader = diff_tensor.reshape(32, 32)
                         
-                    flap = agent.brain.step(drive, agent.velocity)
-                    
-                    if replay_mode:
-                        if replay_frame_idx < len(all_time_action_tape):
-                            flap = all_time_action_tape[replay_frame_idx]
-                        else:
-                            flap = False
-                            
-                    flaps.append(flap)
-                    
-                    # Optional: play click for leader
-                    if flap and i == leader_idx:
-                        sound_fx.play_spike_click()
+                flaps = batched_snn.step_batch(inputs, velocities)
                 
-                if replay_mode and not world.all_dead:
-                    replay_frame_idx += 1
+                if replay_mode:
+                    flaps = np.array([world.frames in all_time_action_tape])
                     
                 world.step(flaps)
                 
+                if flaps[leader_idx] if leader_idx != -1 else False:
+                    sound_fx.play_spike_click()
+                
         # Rendering
         screen.fill(COLOR_PANEL)
-        
         offscreen_surf = world.render()
         screen.blit(offscreen_surf, (0, 0))
         
         # HUD Panel (Right side)
         hud_x = ARENA_WIDTH
         
-        # Grid lines for HUD
         for y in range(0, WINDOW_HEIGHT, 40):
             pygame.draw.line(screen, COLOR_GRID, (hud_x, y), (hud_x + HUD_WIDTH, y))
         for x in range(hud_x, hud_x + HUD_WIDTH, 40):
@@ -316,22 +308,22 @@ def run_simulation():
         pygame.draw.rect(screen, COLOR_GRID, osc_rect, 1)
         
         if leader:
-            hist = leader.brain.voltage_history[-200:]
+            hist = [float(v[0, 0]) for v in batched_snn.voltage_history[-200:]] if replay_mode else [float(v[leader_idx, 0]) for v in batched_snn.voltage_history[-200:]]
             min_v, max_v = -80.0, -40.0
             v_range = max_v - min_v
             
             if len(hist) > 1:
                 pts = []
                 for i, v in enumerate(hist):
-                    x = osc_rect.x + (i / 200) * osc_rect.width
-                    y = osc_rect.y + osc_rect.height - ((v - min_v) / v_range) * osc_rect.height
+                    x = float(osc_rect.x + (i / 200) * osc_rect.width)
+                    y = float(osc_rect.y + osc_rect.height - ((v - min_v) / v_range) * osc_rect.height)
                     pts.append((x, y))
                     
                 pygame.draw.lines(screen, (10, 150, 10), False, pts, 4)
                 pygame.draw.lines(screen, COLOR_PHOSPHOR, False, pts, 1)
                 
-            effective_thresh = leader.brain.v_thresh + leader.brain.adaptive_thresh
-            thresh_y = osc_rect.y + osc_rect.height - ((effective_thresh - min_v) / v_range) * osc_rect.height
+            eff_t = float(batched_snn.v_thresh[0,0] + batched_snn.adaptive_thresh[0,0] if replay_mode else batched_snn.v_thresh[leader_idx,0] + batched_snn.adaptive_thresh[leader_idx,0])
+            thresh_y = float(osc_rect.y + osc_rect.height - ((eff_t - min_v) / v_range) * osc_rect.height)
             pygame.draw.line(screen, COLOR_LEADER, (osc_rect.x, thresh_y), (osc_rect.x + osc_rect.width, thresh_y), 1)
 
         # Pause Overlay

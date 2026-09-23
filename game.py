@@ -6,8 +6,7 @@ from config import (ARENA_WIDTH, WINDOW_HEIGHT, GRAVITY, FLAP_STRENGTH,
                     PIPE_SPEED, PIPE_SPACING, PIPE_GAP, CEILING_DEATH_PENALTY)
 
 class FlyAgent:
-    def __init__(self, brain):
-        self.brain = brain
+    def __init__(self, beta, v_thresh):
         self.x = 50
         self.y = WINDOW_HEIGHT // 2
         self.velocity = 0
@@ -23,24 +22,25 @@ class FlyAgent:
         self.ceiling_hits = 0
         self.gap_alignment_reward = 0.0
         self.oscillation_penalty = 0.0
-        self.action_tape = []
+        self.action_tape = [] # list of frame indices where flap occurred
         self.last_velocity_sign = 0
         
         # Generate lineage color
-        self.color = self._generate_color()
+        self.color = self._generate_color(beta, v_thresh)
 
-    def _generate_color(self):
+    def _generate_color(self, beta, v_thresh):
         # Map parameters to RGB colors
-        r = int(np.clip((self.brain.beta - 0.5) / 0.48, 0, 1) * 255)
-        g = int(np.clip((self.brain.v_thresh + 60) / 25, 0, 1) * 255)
+        r = int(np.clip((beta - 0.5) / 0.48, 0, 1) * 255)
+        g = int(np.clip((v_thresh + 60) / 25, 0, 1) * 255)
         b = 150 # Default for 3rd component
         return (r, g, b)
 
-    def flap(self):
+    def flap(self, frame_index):
         if not self.alive: return
         self.velocity = FLAP_STRENGTH
         self.is_flapping = True
         self.flap_timer = 5
+        self.action_tape.append(frame_index)
 
     def update(self):
         if not self.alive: return
@@ -79,11 +79,11 @@ class FlyAgent:
         angle = max(min(angle, 30), -45)
         
         if self.is_flapping:
-            bird_surf = assets["bird_up"].copy()
+            bird_surf = assets["bird_0"].copy()
         elif self.velocity > 0:
-            bird_surf = assets["bird_down"].copy()
+            bird_surf = assets["bird_2"].copy()
         else:
-            bird_surf = assets["bird_mid"].copy()
+            bird_surf = assets["bird_1"].copy()
             
         # Tint the bird based on genome
         tint = pygame.Surface(bird_surf.get_size(), flags=pygame.SRCALPHA)
@@ -137,9 +137,9 @@ class PipePair:
         surface.blit(flipped_pipe, (self.top_rect.x, blit_y))
 
 class SwarmWorld:
-    def __init__(self, population, assets):
+    def __init__(self, genomes, assets):
         self.surface = pygame.Surface((ARENA_WIDTH, WINDOW_HEIGHT))
-        self.population = population
+        self.genomes = genomes
         self.assets = assets
         self.ground_h = self.assets["ground"].get_height()
         self.ground_x = 0
@@ -147,15 +147,14 @@ class SwarmWorld:
 
     def reset(self, seed):
         random.seed(seed)
-        self.agents = [FlyAgent(brain) for brain in self.population]
+        # Genomes is a list of 1D arrays, where genome[0] = beta, genome[1] = v_thresh
+        self.agents = [FlyAgent(g[0], g[1]) for g in self.genomes]
         self.pipes = []
         self.frames = 0
         self.all_dead = False
         
         # Spawn first pipe
         self.pipes.append(PipePair(ARENA_WIDTH + 200, self.assets["pipe"], self.ground_h))
-        # Reset python random seed back to normal time-based behavior if we want,
-        # but leaving it deterministic for the generation is good too.
 
     def get_leader(self):
         alive_agents = [a for a in self.agents if a.alive]
@@ -172,9 +171,8 @@ class SwarmWorld:
             
         for i, agent in enumerate(self.agents):
             if agent.alive:
-                agent.action_tape.append(bool(flaps[i]))
                 if flaps[i]:
-                    agent.flap()
+                    agent.flap(self.frames)
                 agent.update()
                 
                 # Gap alignment reward

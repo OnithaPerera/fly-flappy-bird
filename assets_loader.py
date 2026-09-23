@@ -131,8 +131,21 @@ def load_or_fetch_assets():
         assets["ground"] = ground_surf
 
     # Always procedurally generate the fruit fly
-    assets["bird_up"] = generate_procedural_fly("up")
-    assets["bird_mid"] = generate_procedural_fly("mid")
-    assets["bird_down"] = generate_procedural_fly("down")
+    fly_up = generate_procedural_fly("up")
+    fly_mid = generate_procedural_fly("mid")
+    fly_down = generate_procedural_fly("down")
+    
+    assets["fly_0"] = fly_up
+    assets["fly_1"] = fly_mid
+    assets["fly_2"] = fly_down
+    
+    assets["bird_0"] = fly_up
+    assets["bird_1"] = fly_mid
+    assets["bird_2"] = fly_down
+    
+    # Legacy keys
+    assets["bird_up"] = fly_up
+    assets["bird_mid"] = fly_mid
+    assets["bird_down"] = fly_down
             
     return assets
