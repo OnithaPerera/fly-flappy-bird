@@ -4,6 +4,11 @@ import random
 import numpy as np
 from config import COLOR_PANEL, COLOR_GRID, COLOR_TEXT, COLOR_ACCENT
 
+# Helper to convert hex to RGB
+def hex_to_rgb(hex_str):
+    hex_str = hex_str.lstrip('#')
+    return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
+
 class Particle:
     def __init__(self, start_pos, end_pos, color, speed=3.0, size=2, tail=False):
         self.x, self.y = start_pos
@@ -40,6 +45,7 @@ class Particle:
         if self.tail:
             tail_pos = (int(self.x - self.vx * 3), int(self.y - self.vy * 3))
             pygame.draw.line(surface, self.color, tail_pos, pos, self.size)
+
 
 class BrainVisualizer:
     def __init__(self, rect):
@@ -80,8 +86,8 @@ class BrainVisualizer:
             
     def spawn_descending_wave(self):
         # Spawn particles specifically for the descending twin tracts
-        self.particles.append(Particle(self.gf_l_start, self.gf_l_end, (255, 255, 255), speed=15.0, size=4, tail=True))
-        self.particles.append(Particle(self.gf_r_start, self.gf_r_end, (255, 255, 255), speed=15.0, size=4, tail=True))
+        self.particles.append(Particle(self.gf_l_start, self.gf_l_end, (200, 255, 255), speed=18.0, size=4, tail=True))
+        self.particles.append(Particle(self.gf_r_start, self.gf_r_end, (200, 255, 255), speed=18.0, size=4, tail=True))
 
     def update_and_draw(self, surface, inputs, gf_v, spiked):
         """
@@ -97,14 +103,21 @@ class BrainVisualizer:
         lplc2_act = max(0.0, gap_offset) + looming + ground # Ventral Excitatory
         haltere_act = min(1.0, abs(vel))
         
+        # Colors based on requested spec
+        cyan_base = hex_to_rgb("#0088AA")
+        cyan_glow = hex_to_rgb("#00FFFF")
+        red_color = hex_to_rgb("#FF3344")
+        amber_color = hex_to_rgb("#FFAA00")
+        magenta_color = hex_to_rgb("#CC00FF")
+        
         # Spawn sensory particles
         if random.random() < lpi_act * 0.5:
-            self.spawn_particles("lpi_l", "central_complex", (255, 30, 50), speed=5.0)
-            self.spawn_particles("lpi_r", "central_complex", (255, 30, 50), speed=5.0)
+            self.spawn_particles("lpi_l", "central_complex", red_color, speed=5.0)
+            self.spawn_particles("lpi_r", "central_complex", red_color, speed=5.0)
             
         if random.random() < lplc2_act * 0.6:
-            self.spawn_particles("lplc2_l", "central_complex", (0, 255, 255), speed=5.0)
-            self.spawn_particles("lplc2_r", "central_complex", (0, 255, 255), speed=5.0)
+            self.spawn_particles("lplc2_l", "central_complex", cyan_glow, speed=5.0)
+            self.spawn_particles("lplc2_r", "central_complex", cyan_glow, speed=5.0)
             
         if spiked:
             self.gf_flash_alpha = 255
@@ -116,30 +129,29 @@ class BrainVisualizer:
         self.mn_flash_alpha = max(0, self.mn_flash_alpha - 15)
         
         # --- DRAW ANATOMICAL SILHOUETTE ---
-        # Draw translucent outer neuropil shell (Navy Blue Capsule)
+        # Draw translucent outer neuropil shell (Navy Blue Capsule: #081224)
+        capsule_color = hex_to_rgb("#081224")
         capsule_rect = pygame.Rect(0, 0, 360, 260)
         capsule_rect.center = (self.center_x, self.center_y)
-        pygame.draw.ellipse(surface, (10, 15, 30), capsule_rect)
-        pygame.draw.ellipse(surface, (20, 30, 60), capsule_rect, 2)
+        
+        # Draw capsule with alpha using a temporary surface
+        cap_surf = pygame.Surface((360, 260), pygame.SRCALPHA)
+        pygame.draw.ellipse(cap_surf, (*capsule_color, 102), cap_surf.get_rect()) # 40% alpha approx 102
+        pygame.draw.ellipse(cap_surf, (*capsule_color, 255), cap_surf.get_rect(), 2)
+        surface.blit(cap_surf, capsule_rect.topleft)
         
         # --- DRAW FIBER TRACTS ---
-        # Connections from LPi to Center
-        pygame.draw.line(surface, (60, 20, 30), self.nodes["lpi_l"], self.nodes["central_complex"], 4)
-        pygame.draw.line(surface, (60, 20, 30), self.nodes["lpi_r"], self.nodes["central_complex"], 4)
+        # Connections from LPi to Center (Dorsal Inhibitory Tracts)
+        pygame.draw.line(surface, red_color, self.nodes["lpi_l"], self.nodes["central_complex"], 4)
+        pygame.draw.line(surface, red_color, self.nodes["lpi_r"], self.nodes["central_complex"], 4)
         
         # Connections from LPLC2 to Center
-        pygame.draw.line(surface, (10, 60, 60), self.nodes["lplc2_l"], self.nodes["central_complex"], 6)
-        pygame.draw.line(surface, (10, 60, 60), self.nodes["lplc2_r"], self.nodes["central_complex"], 6)
+        pygame.draw.line(surface, cyan_base, self.nodes["lplc2_l"], self.nodes["central_complex"], 6)
+        pygame.draw.line(surface, cyan_base, self.nodes["lplc2_r"], self.nodes["central_complex"], 6)
         
         # Twin Giant Fiber Descending Nerve Cords
-        # Vm ranges from ~ -70 to -50
-        v_rest = -70.0
-        v_thresh = -50.0 
-        gf_fill = np.clip((gf_v - v_rest) / (v_thresh - v_rest), 0.0, 1.0)
-        cord_color = (int(60 + gf_fill * 140), 20, int(100 + gf_fill * 155)) # Magenta/Purple shift
-        
-        pygame.draw.line(surface, cord_color, self.gf_l_start, self.gf_l_end, 8)
-        pygame.draw.line(surface, cord_color, self.gf_r_start, self.gf_r_end, 8)
+        pygame.draw.line(surface, magenta_color, self.gf_l_start, self.gf_l_end, 8)
+        pygame.draw.line(surface, magenta_color, self.gf_r_start, self.gf_r_end, 8)
         
         # Update and draw particles
         for p in self.particles[:]:
@@ -149,15 +161,15 @@ class BrainVisualizer:
                 self.particles.remove(p)
                 
         # --- DRAW DENDRITIC CLUSTERS / LOBES ---
-        def draw_lobe(pos, color, intensity, radius, label, num_branches=5):
+        def draw_lobe(pos, base_color, glow_color, intensity, radius, label, num_branches=5):
             glow_alpha = min(255, int(intensity * 255))
             if glow_alpha > 0:
                 glow_surf = pygame.Surface((radius*4, radius*4), pygame.SRCALPHA)
-                pygame.draw.circle(glow_surf, (*color, int(glow_alpha*0.4)), (radius*2, radius*2), radius*2)
+                pygame.draw.circle(glow_surf, (*glow_color, int(glow_alpha*0.4)), (radius*2, radius*2), radius*2)
                 surface.blit(glow_surf, (pos[0]-radius*2, pos[1]-radius*2))
                 
             # Draw core cluster
-            pygame.draw.circle(surface, (color[0]//2, color[1]//2, color[2]//2), pos, radius)
+            pygame.draw.circle(surface, base_color, pos, radius)
             
             # Draw branches
             for i in range(num_branches):
@@ -165,32 +177,47 @@ class BrainVisualizer:
                 branch_len = radius * (1.0 + intensity * 0.5)
                 end_x = pos[0] + math.cos(angle) * branch_len
                 end_y = pos[1] + math.sin(angle) * branch_len
-                pygame.draw.line(surface, color, pos, (int(end_x), int(end_y)), 2)
+                pygame.draw.line(surface, glow_color, pos, (int(end_x), int(end_y)), 2)
                 
             label_surf = self.font.render(label, True, COLOR_TEXT)
             surface.blit(label_surf, (pos[0] - label_surf.get_width()//2, pos[1] + radius + 15))
             
         # Draw LPi (Dorsal Inhibitory)
-        draw_lobe(self.nodes["lpi_l"], (255, 30, 50), lpi_act, 15, "LPi (L)")
-        draw_lobe(self.nodes["lpi_r"], (255, 30, 50), lpi_act, 15, "LPi (R)")
+        draw_lobe(self.nodes["lpi_l"], (100, 0, 0), red_color, lpi_act, 15, "LPi (L)")
+        draw_lobe(self.nodes["lpi_r"], (100, 0, 0), red_color, lpi_act, 15, "LPi (R)")
         
         # Draw LPLC2 (Lateral Optic Lobes)
-        draw_lobe(self.nodes["lplc2_l"], (0, 255, 255), lplc2_act, 25, "LPLC2 / Lobula (L)", num_branches=8)
-        draw_lobe(self.nodes["lplc2_r"], (0, 255, 255), lplc2_act, 25, "LPLC2 / Lobula (R)", num_branches=8)
+        draw_lobe(self.nodes["lplc2_l"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (L)", num_branches=8)
+        draw_lobe(self.nodes["lplc2_r"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (R)", num_branches=8)
         
         # --- DRAW CENTRAL COMPLEX (Ellipsoid Body) ---
         cc_pos = self.nodes["central_complex"]
-        cc_glow = min(255, int(haltere_act * 255))
-        cc_color = (255, 180, 0) # Amber / Gold
+        
+        # Vm ranges from ~ -70 to -50 for visual scaling
+        v_rest = -70.0
+        v_thresh = -50.0 
+        gf_fill = np.clip((gf_v - v_rest) / (v_thresh - v_rest), 0.0, 1.0)
+        
+        # Core brightness dynamically scales with Giant Fiber membrane potential (dim amber to blinding gold)
+        core_color = (
+            min(255, int(amber_color[0] + gf_fill * (255 - amber_color[0]))),
+            min(255, int(amber_color[1] + gf_fill * (255 - amber_color[1]))),
+            min(255, int(amber_color[2] + gf_fill * (255 - amber_color[2])))
+        )
+        
+        # Outer soft glow
+        cc_glow = pygame.Surface((100, 100), pygame.SRCALPHA)
+        pygame.draw.circle(cc_glow, (*amber_color, int(gf_fill * 100)), (50, 50), 40)
+        surface.blit(cc_glow, (cc_pos[0]-50, cc_pos[1]-50))
         
         # Outer ring
-        pygame.draw.circle(surface, (cc_color[0]//3, cc_color[1]//3, 0), cc_pos, 35, 4)
-        pygame.draw.circle(surface, cc_color, cc_pos, 35, max(1, int(haltere_act * 5)))
+        pygame.draw.circle(surface, (amber_color[0]//3, amber_color[1]//3, 0), cc_pos, 35, 4)
+        pygame.draw.circle(surface, amber_color, cc_pos, 35, max(1, int(haltere_act * 5)))
         
         # Inner core
-        pygame.draw.circle(surface, (20, 20, 20), cc_pos, 25)
+        pygame.draw.circle(surface, core_color, cc_pos, 25)
         
-        # Haltere Label
+        # Central Complex Label
         hal_surf = self.font.render("Central Complex", True, COLOR_TEXT)
         surface.blit(hal_surf, (cc_pos[0] - hal_surf.get_width()//2, cc_pos[1] - 50))
         
@@ -204,11 +231,11 @@ class BrainVisualizer:
         # --- DRAW THORACIC MOTOR GANGLION ---
         mn_pos = self.nodes["mn"]
         pygame.draw.circle(surface, (20, 30, 40), mn_pos, 25)
-        pygame.draw.circle(surface, (0, 150, 50), mn_pos, 25, 3)
+        pygame.draw.circle(surface, hex_to_rgb("#00FF00") if self.mn_flash_alpha > 0 else (0, 100, 0), mn_pos, 25, 3)
         
         if self.mn_flash_alpha > 0:
             mn_glow = pygame.Surface((100, 100), pygame.SRCALPHA)
-            pygame.draw.circle(mn_glow, (0, 255, 100, self.mn_flash_alpha), (50, 50), 35)
+            pygame.draw.circle(mn_glow, (*hex_to_rgb("#00FF00"), self.mn_flash_alpha), (50, 50), 35)
             surface.blit(mn_glow, (mn_pos[0]-50, mn_pos[1]-50))
             
         mn_label = self.font.render("Thoracic Motor Ganglion", True, COLOR_TEXT)

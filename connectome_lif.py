@@ -106,8 +106,14 @@ class LobulaColumnarSNN:
         pos_offset = np.maximum(0, gap_offset)
         neg_offset = np.minimum(0, gap_offset)
         
+        # GATED INHIBITION FIX:
+        # If bird.y >= y_gap (gap_offset >= 0), dorsal_inhibition is 0.0.
+        # If bird.y < y_gap (gap_offset < 0), activate dorsal inhibition using W_dive.
+        # We take abs(neg_offset) so that multiplying by negative W_dive yields a negative (inhibitory) current.
+        dorsal_inhibition = np.abs(neg_offset) * self.W_dive
+        
         I_net = (pos_offset * self.W_climb + 
-                 neg_offset * self.W_dive + 
+                 dorsal_inhibition + 
                  looming * self.W_looming + 
                  vel * self.W_vel + 
                  ground * self.W_ground + 
