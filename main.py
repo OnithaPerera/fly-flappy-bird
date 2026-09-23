@@ -14,22 +14,24 @@ from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, FPS,
                     COLOR_PANEL, COLOR_PHOSPHOR, COLOR_GRID, COLOR_LEADER, COLOR_TEXT, COLOR_ACCENT,
                     GA_POPULATION_SIZE, GA_ELITE_COUNT, INITIAL_MUT_RATE, MIN_MUT_RATE, INITIAL_MUT_SCALE, MIN_MUT_SCALE, DECAY_RATE,
                     EYE_RES, EVAL_SEEDS, TOTAL_GENOME_SIZE, 
-                    BOUND_DORSAL_W, BOUND_VENTRAL_W, BOUND_TONIC, BOUND_BETA, BOUND_THRESH, BOUND_HALTERE, BOUND_GROUND_GAIN)
+                    BOUND_DORSAL_W, BOUND_VENTRAL_W, BOUND_VEL, BOUND_ALT, BOUND_TONIC, BOUND_BETA, BOUND_THRESH, BOUND_HALTERE)
 from game import SwarmWorld
-from vision import get_sensory_vector, get_colored_heatmap
-from connectome_lif import BatchedPooledBiologicalLIF
+from vision import extract_forward_binary_grid, get_colored_heatmap
+from connectome_lif import VectorizedProprioceptiveSNN
 from assets_loader import load_or_fetch_assets
 import sound_fx
 
 def generate_random_genome():
     genome = np.zeros(TOTAL_GENOME_SIZE, dtype=np.float32)
-    genome[0:8] = np.random.uniform(BOUND_DORSAL_W[0], BOUND_DORSAL_W[1], 8)
-    genome[8:16] = np.random.uniform(BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1], 8)
-    genome[16] = np.random.uniform(BOUND_TONIC[0], BOUND_TONIC[1])
-    genome[17] = np.random.uniform(BOUND_BETA[0], BOUND_BETA[1])
-    genome[18] = np.random.uniform(BOUND_THRESH[0], BOUND_THRESH[1])
-    genome[19] = np.random.uniform(BOUND_HALTERE[0], BOUND_HALTERE[1])
-    genome[20] = np.random.uniform(BOUND_GROUND_GAIN[0], BOUND_GROUND_GAIN[1])
+    genome[0:32] = np.random.uniform(BOUND_DORSAL_W[0], BOUND_DORSAL_W[1], 32)
+    genome[32:64] = np.random.uniform(BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1], 32)
+    genome[64] = np.random.uniform(BOUND_ALT[0], BOUND_ALT[1])
+    genome[65] = np.random.uniform(BOUND_VEL[0], BOUND_VEL[1])
+    
+    genome[66] = np.random.uniform(BOUND_TONIC[0], BOUND_TONIC[1])
+    genome[67] = np.random.uniform(BOUND_BETA[0], BOUND_BETA[1])
+    genome[68] = np.random.uniform(BOUND_THRESH[0], BOUND_THRESH[1])
+    genome[69] = np.random.uniform(BOUND_HALTERE[0], BOUND_HALTERE[1])
     return genome
 
 def run_simulation():
@@ -47,7 +49,7 @@ def run_simulation():
         print(f"Critical error loading assets: {e}")
         sys.exit(1)
         
-    batched_snn = BatchedPooledBiologicalLIF(GA_POPULATION_SIZE)
+    batched_snn = VectorizedProprioceptiveSNN(GA_POPULATION_SIZE)
     initial_genomes = [generate_random_genome() for _ in range(GA_POPULATION_SIZE)]
     
     if os.path.exists("champion_genome.npy"):
@@ -113,12 +115,11 @@ def run_simulation():
                     if replay_mode:
                         if best_overall_genome is not None:
                             print(f"Entering Replay Mode for seed {all_time_record_seed}")
-                            batched_snn = BatchedPooledBiologicalLIF(1)
+                            batched_snn = VectorizedProprioceptiveSNN(1)
                             batched_snn.set_genomes([best_overall_genome])
                             batched_snn.reset_states()
                             world = SwarmWorld(batched_snn.genomes, assets)
                             world.reset(all_time_record_seed)
-                            prev_frames = [None]
                             paused = False
                             speed_multiplier = 1
                         else:
@@ -126,12 +127,11 @@ def run_simulation():
                             replay_mode = False
                     else:
                         print("Exiting Replay Mode. Resuming evolution...")
-                        batched_snn = BatchedPooledBiologicalLIF(GA_POPULATION_SIZE)
+                        batched_snn = VectorizedProprioceptiveSNN(GA_POPULATION_SIZE)
                         batched_snn.set_genomes(initial_genomes)
                         batched_snn.reset_states()
                         world = SwarmWorld(batched_snn.genomes, assets)
                         world.reset(current_seed)
-                        prev_frames = [None] * GA_POPULATION_SIZE
                         paused = False
                 elif event.key == pygame.K_s:
                     if best_overall_genome is not None:
@@ -162,7 +162,6 @@ def run_simulation():
                         current_seed = EVAL_SEEDS[current_eval_idx]
                         world.reset(current_seed)
                         batched_snn.reset_states()
-                        prev_frames = [None] * GA_POPULATION_SIZE
                         break
                     else:
                         avg_fitnesses = np.mean(agent_scores_per_seed, axis=1) # dual-seed blended average
@@ -240,34 +239,32 @@ def run_simulation():
                         world = SwarmWorld(batched_snn.genomes, assets)
                         world.reset(current_seed)
                         batched_snn.reset_states()
-                        prev_frames = [None] * GA_POPULATION_SIZE
                         break 
                 
                 offscreen_surf = world.render_for_vision()
                 
                 N_active = len(world.agents)
-                inputs = np.zeros((N_active, 16), dtype=np.float32)
-                velocities = np.zeros(N_active, dtype=np.float32)
+                inputs = np.zeros((N_active, 66), dtype=np.float32)
                 y_positions = np.zeros(N_active, dtype=np.float32)
                 
                 leader = world.get_leader()
                 leader_idx = world.agents.index(leader) if leader else -1
-                masked_diff_leader = np.zeros((4, 4))
+                
+                # Single-pass vision
+                vision_x = leader.x if leader else 60.0
+                shared_grid, disp_matrix = extract_forward_binary_grid(offscreen_surf, vision_x)
                 
                 for i, agent in enumerate(world.agents):
                     if not agent.alive:
                         continue
                         
-                    diff_tensor, curr_frame, disp_matrix = get_sensory_vector(offscreen_surf, agent.rect, prev_frames[i], agent.velocity)
-                    prev_frames[i] = curr_frame
-                    inputs[i] = diff_tensor
-                    velocities[i] = agent.velocity
+                    # Build 66-element input
+                    inputs[i, 0:64] = shared_grid
+                    inputs[i, 64] = agent.y / 500.0
+                    inputs[i, 65] = np.clip(agent.velocity / 10.0, -1.0, 1.0)
                     y_positions[i] = agent.y
                     
-                    if i == leader_idx:
-                        masked_diff_leader = disp_matrix
-                        
-                flaps = batched_snn.step_batch(inputs, velocities, y_positions)
+                flaps = batched_snn.step_batch(inputs, y_positions)
                 
                 if replay_mode:
                     flaps = np.array([world.frames in all_time_action_tape])
@@ -339,14 +336,14 @@ def run_simulation():
             pygame.draw.lines(screen, COLOR_ACCENT, False, pts, 2)
             
         # Leader Brain View
-        lb_label = font.render("COMPOUND EYE (4x4 POOLED)", True, COLOR_TEXT)
+        lb_label = font.render("COMPOUND EYE (8x8 BINARY)", True, COLOR_TEXT)
         screen.blit(lb_label, (hud_x + 10, 350))
         
         if leader:
-            heatmap_rgb = get_colored_heatmap(masked_diff_leader)
+            heatmap_rgb = get_colored_heatmap(disp_matrix)
             eye_surf = pygame.surfarray.make_surface(heatmap_rgb)
-            # Nearest neighbor scaling preserves the 4x4 grid pixel look
-            eye_surf = pygame.transform.scale(eye_surf, (100, 100))
+            # Nearest neighbor scaling preserves the 8x8 grid pixel look
+            eye_surf = pygame.transform.scale(eye_surf, (96, 96))
             screen.blit(eye_surf, (hud_x + 10, 375))
             
         # Giant Fiber Oscilloscope

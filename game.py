@@ -23,6 +23,7 @@ class FlyAgent:
         self.gap_alignment_reward = 0.0
         self.oscillation_penalty = 0.0
         self.lethal_penalty = 0.0
+        self.smoothness_reward = 0.0
         self.action_tape = [] # list of frame indices where flap occurred
         self.last_velocity_sign = 0
         
@@ -70,7 +71,7 @@ class FlyAgent:
             self.lethal_penalty += 300.0
 
     def get_fitness(self):
-        return self.frames_survived + (self.score * 1500) + self.gap_alignment_reward - self.oscillation_penalty - self.lethal_penalty
+        return self.frames_survived + (self.score * 1500) + self.gap_alignment_reward + self.smoothness_reward - self.oscillation_penalty - self.lethal_penalty
 
     def draw(self, surface, assets, is_leader=False):
         if not self.alive: return
@@ -183,7 +184,12 @@ class SwarmWorld:
                     if closest_pipe:
                         gap_center_y = closest_pipe.gap_y
                         dist = abs(agent.y - gap_center_y)
-                        agent.gap_alignment_reward += max(0.0, 1.0 - (dist / 150.0)) * 10.0
+                        agent.gap_alignment_reward += max(0.0, 1.0 - (dist / 140.0)) * 10.0
+                        
+                        # Smoothness Reward
+                        if closest_pipe.x <= agent.x <= closest_pipe.x + closest_pipe.width:
+                            if closest_pipe.top_rect.bottom < agent.y < closest_pipe.bottom_rect.top:
+                                agent.smoothness_reward += 20.0
         
         # Spawn pipes based on distance
         if len(self.pipes) > 0 and (ARENA_WIDTH - self.pipes[-1].x) >= PIPE_SPACING:

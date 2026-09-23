@@ -1,10 +1,11 @@
 import numpy as np
 from config import (V_REST, V_RESET, V_THRESH, BETA, REFRACTORY_FRAMES,
                     BOUND_BETA, BOUND_THRESH, HALTERE_DAMPING,
-                    BOUND_DORSAL_W, BOUND_VENTRAL_W, BOUND_TONIC, BOUND_HALTERE, BOUND_GROUND_GAIN,
+                    BOUND_DORSAL_W, BOUND_VENTRAL_W, BOUND_TONIC,
+                    BOUND_ALT, BOUND_VEL,
                     INPUT_NODES, OUTPUT_NODES, GA_POPULATION_SIZE, TOTAL_GENOME_SIZE)
 
-class BatchedPooledBiologicalLIF:
+class VectorizedProprioceptiveSNN:
     def __init__(self, num_agents=GA_POPULATION_SIZE):
         self.N = num_agents
         
@@ -14,32 +15,35 @@ class BatchedPooledBiologicalLIF:
         self.voltage_history = []
         
         # Genomes/weights (Batched)
-        self.W_dorsal = np.zeros((self.N, 8), dtype=np.float32)
-        self.W_ventral = np.zeros((self.N, 8), dtype=np.float32)
+        self.W_dorsal = np.zeros((self.N, 32), dtype=np.float32)
+        self.W_ventral = np.zeros((self.N, 32), dtype=np.float32)
+        self.W_alt = np.zeros((self.N, 1), dtype=np.float32)
+        self.W_vel = np.zeros((self.N, 1), dtype=np.float32)
+        
         self.I_tonic = np.zeros((self.N, 1), dtype=np.float32)
         self.beta = np.zeros((self.N, 1), dtype=np.float32)
         self.v_thresh = np.zeros((self.N, 1), dtype=np.float32)
         self.haltere_damping = np.zeros((self.N, 1), dtype=np.float32)
-        self.ground_gain = np.zeros((self.N, 1), dtype=np.float32)
         
         self.genomes = np.zeros((self.N, TOTAL_GENOME_SIZE), dtype=np.float32)
 
     def set_genomes(self, list_of_vectors):
         """
-        Loads a list of 1D genomes (size 22) into the batched weight arrays.
+        Loads a list of 1D genomes (size 70) into the batched weight arrays.
         """
         for i, genome in enumerate(list_of_vectors):
             self.genomes[i] = genome
             
-            # Extract 22 parameters
-            self.W_dorsal[i] = genome[0:8]
-            self.W_ventral[i] = genome[8:16]
-            self.I_tonic[i, 0] = genome[16]
-            self.beta[i, 0] = genome[17]
-            self.v_thresh[i, 0] = genome[18]
-            self.haltere_damping[i, 0] = genome[19]
-            self.ground_gain[i, 0] = genome[20]
-            # Parameter 21 is unused but could be for future expansion, or we can just ignore it since requested size is 22.
+            # Extract 70 parameters
+            self.W_dorsal[i] = genome[0:32]
+            self.W_ventral[i] = genome[32:64]
+            self.W_alt[i, 0] = genome[64]
+            self.W_vel[i, 0] = genome[65]
+            
+            self.I_tonic[i, 0] = genome[66]
+            self.beta[i, 0] = genome[67]
+            self.v_thresh[i, 0] = genome[68]
+            self.haltere_damping[i, 0] = genome[69]
             
     def get_elite_genomes(self, elite_indices):
         return [self.genomes[i].copy() for i in elite_indices]
@@ -61,13 +65,17 @@ class BatchedPooledBiologicalLIF:
             child += mask * mutations
             
             # Enforce bounds
-            child[0:8] = np.clip(child[0:8], BOUND_DORSAL_W[0], BOUND_DORSAL_W[1])
-            child[8:16] = np.clip(child[8:16], BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1])
-            child[16] = np.clip(child[16], BOUND_TONIC[0], BOUND_TONIC[1])
-            child[17] = np.clip(child[17], BOUND_BETA[0], BOUND_BETA[1])
-            child[18] = np.clip(child[18], BOUND_THRESH[0], BOUND_THRESH[1])
-            child[19] = np.clip(child[19], BOUND_HALTERE[0], BOUND_HALTERE[1])
-            child[20] = np.clip(child[20], BOUND_GROUND_GAIN[0], BOUND_GROUND_GAIN[1])
+            child[0:32] = np.clip(child[0:32], BOUND_DORSAL_W[0], BOUND_DORSAL_W[1])
+            child[32:64] = np.clip(child[32:64], BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1])
+            child[64] = np.clip(child[64], BOUND_ALT[0], BOUND_ALT[1])
+            child[65] = np.clip(child[65], BOUND_VEL[0], BOUND_VEL[1])
+            
+            child[66] = np.clip(child[66], BOUND_TONIC[0], BOUND_TONIC[1])
+            child[67] = np.clip(child[67], BOUND_BETA[0], BOUND_BETA[1])
+            child[68] = np.clip(child[68], BOUND_THRESH[0], BOUND_THRESH[1])
+            # We don't have BOUND_HALTERE anymore? No we still need it. Let's add it back if we can.
+            # I'll just use a generic bound or [0.1, 0.5] like before. Let's use [0.1, 0.5].
+            child[69] = np.clip(child[69], 0.1, 0.5)
             
             new_genomes.append(child)
             
@@ -78,11 +86,10 @@ class BatchedPooledBiologicalLIF:
         self.refractory_timer.fill(0)
         self.voltage_history = []
         
-    def step_batch(self, inputs_Nx16, velocities_N, y_positions_N):
+    def step_batch(self, inputs_batch, y_positions_N):
         """
-        Vectorized LIF simulation step for the entire swarm using 4x4 spatial pooled vision.
-        inputs_Nx16: shape (N, 16) - The 4x4 grid flattened
-        velocities_N: shape (N,)
+        Vectorized LIF simulation step for the entire swarm.
+        inputs_batch: shape (N, 66) - [Shared_Grid_64, Altitudes_40, Velocities_40]
         y_positions_N: shape (N,)
         Returns boolean array of shape (N,) indicating flaps.
         """
@@ -90,24 +97,26 @@ class BatchedPooledBiologicalLIF:
         self.refractory_timer[~active_mask] -= 1
         self.gf_v[~active_mask] = V_RESET
         
-        # Split inputs into Dorsal (top 8) and Ventral (bottom 8)
-        dorsal_inputs = inputs_Nx16[:, 0:8]
-        ventral_inputs = inputs_Nx16[:, 8:16]
+        # Split inputs
+        dorsal_inputs = inputs_batch[:, 0:32]
+        ventral_inputs = inputs_batch[:, 32:64]
+        alt_inputs = inputs_batch[:, 64:65]
+        vel_inputs = inputs_batch[:, 65:66]
         
         # Compute visual currents
         I_dorsal = np.sum(dorsal_inputs * self.W_dorsal, axis=1, keepdims=True)
         I_ventral = np.sum(ventral_inputs * self.W_ventral, axis=1, keepdims=True)
         
-        # If bird vertical velocity is upward, scale excitatory current by haltere damping (fixed to 0.35 scalar)
-        haltere_mask = velocities_N < 0
-        I_ventral[haltere_mask] *= 0.35
+        # Compute proprioceptive currents
+        I_alt = alt_inputs * self.W_alt
+        I_vel = vel_inputs * self.W_vel
         
         # Net current
-        I_net = I_ventral + I_dorsal + self.I_tonic
+        I_net = I_ventral + I_dorsal + I_alt + I_vel + self.I_tonic
         
-        # Ground Emergency Reflex (y > 400)
-        ground_mask = y_positions_N > 400.0
-        I_ground = (y_positions_N[ground_mask] - 400.0) * 0.15
+        # Ground Emergency Reflex (y > 420)
+        ground_mask = y_positions_N > 420.0
+        I_ground = (y_positions_N[ground_mask] - 420.0) * 0.15
         I_net[ground_mask, 0] += I_ground
         
         # Update membrane potential
