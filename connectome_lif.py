@@ -3,7 +3,8 @@ from config import (V_REST, V_RESET, V_THRESH, BETA, REFRACTORY_FRAMES,
                     BOUND_BETA, BOUND_THRESH,
                     BOUND_W_CLIMB, BOUND_W_DIVE, BOUND_W_LOOMING,
                     BOUND_W_VEL, BOUND_W_GROUND, BOUND_TONIC,
-                    OUTPUT_NODES, GA_POPULATION_SIZE, TOTAL_GENOME_SIZE)
+                    OUTPUT_NODES, GA_POPULATION_SIZE, TOTAL_GENOME_SIZE,
+                    GROUND_Y)
 
 class LobulaColumnarSNN:
     def __init__(self, num_agents=GA_POPULATION_SIZE):
@@ -119,10 +120,11 @@ class LobulaColumnarSNN:
                  ground * self.W_ground + 
                  self.I_tonic)
         
-        # Ground Emergency Reflex (y > 420)
+        # Ground Emergency Reflex (y > config.GROUND_Y - 120.0)
         # Note: We already have ground_hazard, but keeping this extra safeguard just in case
-        ground_mask = y_positions_N > 420.0
-        I_ground_emergency = (y_positions_N[ground_mask] - 420.0) * 0.15
+        ground_thresh = GROUND_Y - 120.0
+        ground_mask = y_positions_N > ground_thresh
+        I_ground_emergency = (y_positions_N[ground_mask] - ground_thresh) * 0.15
         I_net[ground_mask, 0] += I_ground_emergency
         
         # Update membrane potential

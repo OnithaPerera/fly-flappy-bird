@@ -106,7 +106,7 @@ class BrainVisualizer:
         # Colors based on requested spec
         cyan_base = hex_to_rgb("#0088AA")
         cyan_glow = hex_to_rgb("#00FFFF")
-        red_color = hex_to_rgb("#FF3344")
+        red_color = hex_to_rgb("#FF3366")
         amber_color = hex_to_rgb("#FFAA00")
         magenta_color = hex_to_rgb("#CC00FF")
         
@@ -129,16 +129,28 @@ class BrainVisualizer:
         self.mn_flash_alpha = max(0, self.mn_flash_alpha - 15)
         
         # --- DRAW ANATOMICAL SILHOUETTE ---
-        # Draw translucent outer neuropil shell (Navy Blue Capsule: #081224)
+        # Draw translucent outer neuropil shell (Navy Blue: #081224)
         capsule_color = hex_to_rgb("#081224")
-        capsule_rect = pygame.Rect(0, 0, 360, 260)
-        capsule_rect.center = (self.center_x, self.center_y)
+        cap_surf = pygame.Surface((400, 300), pygame.SRCALPHA)
         
-        # Draw capsule with alpha using a temporary surface
-        cap_surf = pygame.Surface((360, 260), pygame.SRCALPHA)
-        pygame.draw.ellipse(cap_surf, (*capsule_color, 102), cap_surf.get_rect()) # 40% alpha approx 102
-        pygame.draw.ellipse(cap_surf, (*capsule_color, 255), cap_surf.get_rect(), 2)
-        surface.blit(cap_surf, capsule_rect.topleft)
+        # Draw actual contour of insect brain (broad lateral lobes tapering inward)
+        # We can approximate this using a polygon or multiple overlapping ellipses
+        center_pt = (200, 150)
+        
+        # Central brain mass
+        pygame.draw.ellipse(cap_surf, (*capsule_color, 89), (120, 50, 160, 200)) # 35% alpha approx 89
+        # Left optic lobe
+        pygame.draw.ellipse(cap_surf, (*capsule_color, 89), (20, 80, 140, 140))
+        # Right optic lobe
+        pygame.draw.ellipse(cap_surf, (*capsule_color, 89), (240, 80, 140, 140))
+        
+        # Outline (Central)
+        pygame.draw.ellipse(cap_surf, (*capsule_color, 255), (120, 50, 160, 200), 2)
+        # Outline (Lobes)
+        pygame.draw.ellipse(cap_surf, (*capsule_color, 255), (20, 80, 140, 140), 2)
+        pygame.draw.ellipse(cap_surf, (*capsule_color, 255), (240, 80, 140, 140), 2)
+        
+        surface.blit(cap_surf, (self.center_x - 200, self.center_y - 150))
         
         # --- DRAW FIBER TRACTS ---
         # Connections from LPi to Center (Dorsal Inhibitory Tracts)

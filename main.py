@@ -13,7 +13,7 @@ run_preflight_checks()
 from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, LAB_WIDTH, FPS,
                     COLOR_PANEL, COLOR_PHOSPHOR, COLOR_GRID, COLOR_LEADER, COLOR_TEXT, COLOR_ACCENT,
                     GA_POPULATION_SIZE, GA_ELITE_COUNT, INITIAL_MUT_RATE, MIN_MUT_RATE, INITIAL_MUT_SCALE, MIN_MUT_SCALE, DECAY_RATE,
-                    EYE_RES, EVAL_SEEDS, TOTAL_GENOME_SIZE, 
+                    EYE_RES, EVAL_SEEDS, TOTAL_GENOME_SIZE, GROUND_Y,
                     BOUND_W_CLIMB, BOUND_W_DIVE, BOUND_W_LOOMING, BOUND_W_VEL, BOUND_W_GROUND, BOUND_TONIC, BOUND_BETA, BOUND_THRESH)
 from game import SwarmWorld
 from vision import extract_forward_binary_grid, get_colored_heatmap
@@ -73,7 +73,7 @@ def run_simulation():
     world.reset(current_seed)
     batched_snn.reset_states()
     
-    lab_rect = (ARENA_WIDTH, 0, LAB_WIDTH, 680)
+    lab_rect = (ARENA_WIDTH, 0, LAB_WIDTH, 750)
     brain_visualizer = BrainVisualizer(lab_rect)
     generation = 1
     max_fitness_history = []
@@ -271,13 +271,13 @@ def run_simulation():
                     closest_pipe = next((p for p in world.pipes if p.x + p.width > agent.x), None)
                     if closest_pipe:
                         looming = max(0.0, 1.0 - (max(0, closest_pipe.x - agent.x) / 300.0))
-                        gap_offset = (agent.y - closest_pipe.gap_y) / 200.0
+                        gap_offset = (agent.y - closest_pipe.gap_y) / (GROUND_Y * 0.4)
                     else:
                         looming = 0.0
-                        gap_offset = (agent.y - 250.0) / 200.0
+                        gap_offset = (agent.y - (GROUND_Y / 2.0)) / (GROUND_Y * 0.4)
                         
                     vel = np.clip(agent.velocity / 10.0, -1.0, 1.0)
-                    ground = max(0.0, (agent.y - 380.0) / 100.0)
+                    ground = max(0.0, (agent.y - (GROUND_Y - 120.0)) / 100.0)
                         
                     # Build 4-element input
                     inputs[i, 0] = looming
@@ -404,9 +404,9 @@ def run_simulation():
             
         # Giant Fiber Oscilloscope (Center Deck - Bottom)
         osc_label = font.render("GIANT FIBER VOLTAGE (Vm)", True, COLOR_TEXT)
-        screen.blit(osc_label, (lab_x + 10, 680))
+        screen.blit(osc_label, (lab_x + 10, 755))
         
-        osc_rect = pygame.Rect(lab_x + 10, 705, 520, 80)
+        osc_rect = pygame.Rect(lab_x + 10, 780, 550, 100)
         pygame.draw.rect(screen, (0, 0, 0), osc_rect)
         pygame.draw.rect(screen, COLOR_GRID, osc_rect, 1)
         

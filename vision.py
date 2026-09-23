@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import pygame
-from config import EYE_RES, ARENA_WIDTH, WINDOW_HEIGHT
+from config import EYE_RES, ARENA_WIDTH, WINDOW_HEIGHT, GROUND_Y
 
 def extract_forward_binary_grid(surface, bird_x):
     """
@@ -9,14 +9,15 @@ def extract_forward_binary_grid(surface, bird_x):
     applies binary thresholding, downsamples to 8x8, and returns a 64-element
     float32 array normalized to [0.0, 1.0] and the 8x8 uint8 visualization.
     """
-    # Crop horizontally from x = bird_x to x = bird_x + 320
-    # Crop vertically from y = 0 to y = 500
-    crop_w = 320
-    crop_h = 500
+    start_x = int(bird_x)
+    
+    # Crop horizontally from x = bird_x to x = min(ARENA_WIDTH, bird_x + 320)
+    # Crop vertically from y = 0 to y = GROUND_Y
+    crop_w = min(320, ARENA_WIDTH - start_x)
+    crop_h = GROUND_Y
     
     # Ensure we don't go out of bounds of the surface
     surf_w, surf_h = surface.get_size()
-    start_x = int(bird_x)
     
     # If the bird is too close to the right edge of the *entire* surface, clamp it (though ARENA_WIDTH should prevent this if surface is large enough)
     if start_x + crop_w > surf_w:
