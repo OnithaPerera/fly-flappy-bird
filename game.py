@@ -22,6 +22,7 @@ class FlyAgent:
         self.ceiling_hits = 0
         self.gap_alignment_reward = 0.0
         self.oscillation_penalty = 0.0
+        self.lethal_penalty = 0.0
         self.action_tape = [] # list of frame indices where flap occurred
         self.last_velocity_sign = 0
         
@@ -66,9 +67,10 @@ class FlyAgent:
             self.rect.y = 0
             self.alive = False
             self.ceiling_hits += 1
+            self.lethal_penalty += 300.0
 
     def get_fitness(self):
-        return self.frames_survived + (self.score * 1500) + self.gap_alignment_reward - self.oscillation_penalty - (self.ceiling_hits * CEILING_DEATH_PENALTY)
+        return self.frames_survived + (self.score * 1500) + self.gap_alignment_reward - self.oscillation_penalty - self.lethal_penalty
 
     def draw(self, surface, assets, is_leader=False):
         if not self.alive: return
@@ -181,7 +183,7 @@ class SwarmWorld:
                     if closest_pipe:
                         gap_center_y = closest_pipe.gap_y
                         dist = abs(agent.y - gap_center_y)
-                        agent.gap_alignment_reward += max(0.0, 1.0 - dist / 160.0) * 8.0
+                        agent.gap_alignment_reward += max(0.0, 1.0 - (dist / 150.0)) * 10.0
         
         # Spawn pipes based on distance
         if len(self.pipes) > 0 and (ARENA_WIDTH - self.pipes[-1].x) >= PIPE_SPACING:
@@ -210,6 +212,7 @@ class SwarmWorld:
             if agent.y >= WINDOW_HEIGHT - self.ground_h - 10:
                 agent.alive = False
                 agent.death_frame = self.frames
+                agent.lethal_penalty += 300.0
                 
             for pipe in self.pipes:
                 if agent.rect.colliderect(pipe.top_rect) or agent.rect.colliderect(pipe.bottom_rect):

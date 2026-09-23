@@ -188,16 +188,16 @@ def run_simulation():
                         mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
                         mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
                         
-                        if stagnant_generations >= 4:
+                        if stagnant_generations >= 3:
                             print("Diversity Pulse Triggered!")
-                            mut_scale *= 1.8
+                            mut_scale = 0.25
                             stagnant_generations = 0
                             
                             # Keep elites
                             new_genomes = [batched_snn.genomes[idx].copy() for idx in elite_indices]
                             
-                            # Re-randomize bottom 25% (10 agents)
-                            num_random = GA_POPULATION_SIZE // 4
+                            # Re-randomize bottom 30% (12 agents)
+                            num_random = int(GA_POPULATION_SIZE * 0.3)
                             
                             # Fill the rest with mutated tournaments
                             while len(new_genomes) < GA_POPULATION_SIZE - num_random:

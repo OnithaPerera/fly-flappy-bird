@@ -5,22 +5,18 @@ from config import EYE_RES, ARENA_WIDTH, WINDOW_HEIGHT
 
 def get_sensory_vector(surface, bird_rect, prev_frame, bird_vel):
     """
-    Crops a 180x180 region forward of the bird, downsamples to 32x32 grayscale,
+    Crops a full-height region forward of the bird, downsamples to 32x32 grayscale,
     compensates for vertical egomotion, spatially pools to 4x4, and computes 
     the 16-element fused expansion tensor.
     Returns: (flattened_tensor, current_downsampled_frame, visual_display_matrix_4x4)
     """
-    # Define crop region: 180x180 ahead of bird
+    # Define crop region: bird.right to +280, y=0 to y=500
     crop_x = bird_rect.right
-    crop_y = bird_rect.centery - 90
+    crop_w = min(ARENA_WIDTH - crop_x, 280)
+    if crop_w <= 0:
+        return np.zeros(16, dtype=np.float32), None, np.zeros((4,4), dtype=np.uint8)
     
-    # Clamp to screen boundaries
-    if crop_x < 0: crop_x = 0
-    if crop_y < 0: crop_y = 0
-    if crop_x + 180 > ARENA_WIDTH: crop_x = ARENA_WIDTH - 180
-    if crop_y + 180 > WINDOW_HEIGHT: crop_y = WINDOW_HEIGHT - 180
-    
-    crop_rect = pygame.Rect(crop_x, crop_y, 180, 180)
+    crop_rect = pygame.Rect(crop_x, 0, crop_w, 500)
     
     # Extract subsurface and convert to numpy array
     sub_surf = surface.subsurface(crop_rect)
@@ -46,16 +42,16 @@ def get_sensory_vector(surface, bird_rect, prev_frame, bird_vel):
     pooled_curr = cv2.resize(curr_frame, (4, 4), interpolation=cv2.INTER_AREA)
     pooled_prev = cv2.resize(shifted_prev, (4, 4), interpolation=cv2.INTER_AREA)
         
-    D = cv2.absdiff(pooled_curr, pooled_prev).astype(np.float32)
-    # Cancel horizontal parallax scrolling
-    D = np.maximum(0, D - np.median(D, axis=1, keepdims=True))
+    # Compute static contrast against sky (clip 200 - frame)
+    C = np.clip((200.0 - pooled_curr.astype(np.float32)) / 150.0, 0.0, 1.0)
     
-    C = 255.0 - pooled_curr.astype(np.float32)
+    # Compute temporal difference
+    D = np.abs(pooled_curr.astype(np.float32) - pooled_prev.astype(np.float32)) / 255.0
     
-    Visual_Signal = (0.65 * D) + (0.35 * C)
+    Visual_Signal = (0.7 * C) + (0.3 * D)
     
     # Normalize to [0, 1] range
-    Visual_Signal = np.clip(Visual_Signal / 255.0, 0.0, 1.0)
+    Visual_Signal = np.clip(Visual_Signal, 0.0, 1.0)
     
     display_matrix = (Visual_Signal * 255).astype(np.uint8)
     

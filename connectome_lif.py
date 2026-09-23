@@ -98,25 +98,24 @@ class BatchedPooledBiologicalLIF:
         I_dorsal = np.sum(dorsal_inputs * self.W_dorsal, axis=1, keepdims=True)
         I_ventral = np.sum(ventral_inputs * self.W_ventral, axis=1, keepdims=True)
         
-        # If bird vertical velocity is upward, scale excitatory current by haltere damping
+        # If bird vertical velocity is upward, scale excitatory current by haltere damping (fixed to 0.35 scalar)
         haltere_mask = velocities_N < 0
-        I_ventral[haltere_mask] *= self.haltere_damping[haltere_mask]
+        I_ventral[haltere_mask] *= 0.35
         
         # Net current
         I_net = I_ventral + I_dorsal + self.I_tonic
         
-        # Altitude Recovery Reflex (y > 250 and falling vel > 1.0)
-        falling_mask = (y_positions_N > 250.0) & (velocities_N > 1.0)
-        # We need a shape (N, 1) to match I_net
-        I_altitude = np.maximum(0.0, (y_positions_N[falling_mask] - 250.0) / 70.0) * 1.8
-        I_net[falling_mask, 0] += I_altitude
+        # Ground Emergency Reflex (y > 400)
+        ground_mask = y_positions_N > 400.0
+        I_ground = (y_positions_N[ground_mask] - 400.0) * 0.15
+        I_net[ground_mask, 0] += I_ground
         
         # Update membrane potential
         self.gf_v[active_mask] = (self.gf_v[active_mask] - V_REST) * self.beta[active_mask] + V_REST + I_net[active_mask]
         
-        # Ceiling Lockdown
-        ceiling_mask = (y_positions_N < 120.0)
-        self.gf_v[ceiling_mask, 0] = np.minimum(self.gf_v[ceiling_mask, 0], -65.0)
+        # Ceiling Lockdown (force V_m to V_REST if y < 90)
+        ceiling_mask = (y_positions_N < 90.0)
+        self.gf_v[ceiling_mask, 0] = V_REST
         
         self.voltage_history.append(self.gf_v.copy())
         
