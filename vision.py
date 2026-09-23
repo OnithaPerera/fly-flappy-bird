@@ -5,22 +5,22 @@ from config import EYE_RES, ARENA_WIDTH, WINDOW_HEIGHT
 
 def get_sensory_vector(surface, bird_rect, prev_frame, bird_vel):
     """
-    Crops a 160x160 region forward of the bird, downsamples to 32x32 grayscale,
+    Crops a 180x180 region forward of the bird, downsamples to 32x32 grayscale,
     compensates for vertical egomotion, spatially pools to 4x4, and computes 
-    the 16-element expansion tensor.
-    Returns: (flattened_tensor, current_downsampled_frame)
+    the 16-element fused expansion tensor.
+    Returns: (flattened_tensor, current_downsampled_frame, visual_display_matrix_4x4)
     """
-    # Define crop region: 160x160 ahead of bird
+    # Define crop region: 180x180 ahead of bird
     crop_x = bird_rect.right
-    crop_y = bird_rect.centery - 80
+    crop_y = bird_rect.centery - 90
     
     # Clamp to screen boundaries
     if crop_x < 0: crop_x = 0
     if crop_y < 0: crop_y = 0
-    if crop_x + 160 > ARENA_WIDTH: crop_x = ARENA_WIDTH - 160
-    if crop_y + 160 > WINDOW_HEIGHT: crop_y = WINDOW_HEIGHT - 160
+    if crop_x + 180 > ARENA_WIDTH: crop_x = ARENA_WIDTH - 180
+    if crop_y + 180 > WINDOW_HEIGHT: crop_y = WINDOW_HEIGHT - 180
     
-    crop_rect = pygame.Rect(crop_x, crop_y, 160, 160)
+    crop_rect = pygame.Rect(crop_x, crop_y, 180, 180)
     
     # Extract subsurface and convert to numpy array
     sub_surf = surface.subsurface(crop_rect)
@@ -31,7 +31,7 @@ def get_sensory_vector(surface, bird_rect, prev_frame, bird_vel):
     curr_frame = cv2.resize(frame_gray, (EYE_RES, EYE_RES), interpolation=cv2.INTER_AREA)
     
     if prev_frame is None:
-        return np.zeros(16, dtype=np.float32), curr_frame
+        return np.zeros(16, dtype=np.float32), curr_frame, np.zeros((4,4), dtype=np.uint8)
         
     # Vertical egomotion shift
     shift_y = int(round(-bird_vel * 0.7))
@@ -46,27 +46,25 @@ def get_sensory_vector(surface, bird_rect, prev_frame, bird_vel):
     pooled_curr = cv2.resize(curr_frame, (4, 4), interpolation=cv2.INTER_AREA)
     pooled_prev = cv2.resize(shifted_prev, (4, 4), interpolation=cv2.INTER_AREA)
         
-    diff = cv2.absdiff(pooled_curr, pooled_prev).astype(np.float32)
-    
+    D = cv2.absdiff(pooled_curr, pooled_prev).astype(np.float32)
     # Cancel horizontal parallax scrolling
-    diff = np.maximum(0, diff - np.median(diff, axis=1, keepdims=True))
+    D = np.maximum(0, D - np.median(D, axis=1, keepdims=True))
+    
+    C = 255.0 - pooled_curr.astype(np.float32)
+    
+    Visual_Signal = (0.65 * D) + (0.35 * C)
     
     # Normalize to [0, 1] range
-    diff = diff / 255.0
+    Visual_Signal = np.clip(Visual_Signal / 255.0, 0.0, 1.0)
     
-    return diff.flatten(), curr_frame
+    display_matrix = (Visual_Signal * 255).astype(np.uint8)
+    
+    return Visual_Signal.flatten(), curr_frame, display_matrix
 
 def get_colored_heatmap(matrix_4x4):
     """
     Applies a color map for the HUD thermal display (4x4).
     """
-    disp_eye = matrix_4x4.copy()
-    max_val = np.max(disp_eye)
-    if max_val > 0:
-        disp_eye = (disp_eye / max_val * 255).astype(np.uint8)
-    else:
-        disp_eye = disp_eye.astype(np.uint8)
-        
-    heatmap = cv2.applyColorMap(disp_eye, cv2.COLORMAP_INFERNO)
+    heatmap = cv2.applyColorMap(matrix_4x4, cv2.COLORMAP_VIRIDIS)
     heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
     return np.transpose(heatmap, (1, 0, 2))

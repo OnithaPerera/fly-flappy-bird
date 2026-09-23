@@ -146,7 +146,7 @@ class SwarmWorld:
         self.reset(seed=42)
 
     def reset(self, seed):
-        random.seed(42) # Force evaluation stability for early training
+        random.seed(seed)
         # Genomes: g[17] = beta, g[18] = v_thresh
         self.agents = [FlyAgent(g[17], g[18]) for g in self.genomes]
         self.pipes = []
@@ -179,9 +179,9 @@ class SwarmWorld:
                 if agent.alive:
                     closest_pipe = next((p for p in self.pipes if p.x + p.width > agent.x), None)
                     if closest_pipe:
-                        gap_center = closest_pipe.gap_y
-                        dist = abs(agent.y - gap_center)
-                        agent.gap_alignment_reward += max(0.0, 1.0 - dist / 180.0) * 8.0
+                        gap_center_y = closest_pipe.gap_y
+                        dist = abs(agent.y - gap_center_y)
+                        agent.gap_alignment_reward += max(0.0, 1.0 - dist / 160.0) * 8.0
         
         # Spawn pipes based on distance
         if len(self.pipes) > 0 and (ARENA_WIDTH - self.pipes[-1].x) >= PIPE_SPACING:

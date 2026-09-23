@@ -80,7 +80,8 @@ def run_simulation():
     all_time_action_tape = set()
     best_overall_genome = None
     
-    agent_total_fitness = np.zeros(GA_POPULATION_SIZE, dtype=np.float32)
+    agent_scores_per_seed = np.zeros((GA_POPULATION_SIZE, len(EVAL_SEEDS)), dtype=np.float32)
+    stagnant_generations = 0
     best_run_tapes = [None] * GA_POPULATION_SIZE
     best_run_seeds = [None] * GA_POPULATION_SIZE
     best_run_scores = [-1] * GA_POPULATION_SIZE
@@ -149,7 +150,7 @@ def run_simulation():
                     # Evolution step
                     for i, a in enumerate(world.agents):
                         fit = a.get_fitness()
-                        agent_total_fitness[i] += fit
+                        agent_scores_per_seed[i, current_eval_idx] = fit
                         if fit > best_run_scores[i]:
                             best_run_scores[i] = fit
                             best_run_tapes[i] = set(a.action_tape)
@@ -164,7 +165,7 @@ def run_simulation():
                         prev_frames = [None] * GA_POPULATION_SIZE
                         break
                     else:
-                        avg_fitnesses = agent_total_fitness / len(EVAL_SEEDS)
+                        avg_fitnesses = np.min(agent_scores_per_seed, axis=1) # dual-seed min fitness
                         best_idx = int(np.argmax(avg_fitnesses))
                         gen_max_fitness = avg_fitnesses[best_idx]
                         max_fitness_history.append(gen_max_fitness)
@@ -174,7 +175,10 @@ def run_simulation():
                             all_time_record_seed = best_run_seeds[best_idx]
                             all_time_action_tape = best_run_tapes[best_idx]
                             best_overall_genome = batched_snn.genomes[best_idx].copy()
+                            stagnant_generations = 0
                             print(f"New All-Time Record: {all_time_record:.1f} (Seed: {all_time_record_seed})")
+                        else:
+                            stagnant_generations += 1
                             
                         print(f"Gen {generation} | Max Fit: {gen_max_fitness:.1f} | Avg Fit: {np.mean(avg_fitnesses):.1f}")
                         
@@ -183,8 +187,44 @@ def run_simulation():
                         
                         mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
                         mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
+                        
+                        if stagnant_generations >= 4:
+                            print("Diversity Pulse Triggered!")
+                            mut_scale *= 1.8
+                            stagnant_generations = 0
                             
-                        batched_snn.reproduce_and_mutate(elite_indices, avg_fitnesses, mut_rate, mut_scale)
+                            # Keep elites
+                            new_genomes = [batched_snn.genomes[idx].copy() for idx in elite_indices]
+                            
+                            # Re-randomize bottom 25% (10 agents)
+                            num_random = GA_POPULATION_SIZE // 4
+                            
+                            # Fill the rest with mutated tournaments
+                            while len(new_genomes) < GA_POPULATION_SIZE - num_random:
+                                tourney = np.random.choice(GA_POPULATION_SIZE, 3, replace=False)
+                                winner_idx = tourney[np.argmax(avg_fitnesses[tourney])]
+                                
+                                child = batched_snn.genomes[winner_idx].copy()
+                                mask = np.random.rand(TOTAL_GENOME_SIZE) < mut_rate
+                                mutations = np.random.normal(0, mut_scale, TOTAL_GENOME_SIZE)
+                                child += mask * mutations
+                                
+                                child[0:8] = np.clip(child[0:8], BOUND_DORSAL_W[0], BOUND_DORSAL_W[1])
+                                child[8:16] = np.clip(child[8:16], BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1])
+                                child[16] = np.clip(child[16], BOUND_TONIC[0], BOUND_TONIC[1])
+                                child[17] = np.clip(child[17], BOUND_BETA[0], BOUND_BETA[1])
+                                child[18] = np.clip(child[18], BOUND_THRESH[0], BOUND_THRESH[1])
+                                child[19] = np.clip(child[19], BOUND_HALTERE[0], BOUND_HALTERE[1])
+                                child[20] = np.clip(child[20], BOUND_GROUND_GAIN[0], BOUND_GROUND_GAIN[1])
+                                new_genomes.append(child)
+                                
+                            # Add random agents
+                            for _ in range(num_random):
+                                new_genomes.append(generate_random_genome())
+                                
+                            batched_snn.set_genomes(new_genomes)
+                        else:
+                            batched_snn.reproduce_and_mutate(elite_indices, avg_fitnesses, mut_rate, mut_scale)
                         
                         initial_genomes = [batched_snn.genomes[i].copy() for i in range(GA_POPULATION_SIZE)]
                         
@@ -192,7 +232,7 @@ def run_simulation():
                         current_eval_idx = 0
                         current_seed = EVAL_SEEDS[current_eval_idx]
                         
-                        agent_total_fitness.fill(0)
+                        agent_scores_per_seed.fill(0)
                         best_run_tapes = [None] * GA_POPULATION_SIZE
                         best_run_seeds = [None] * GA_POPULATION_SIZE
                         best_run_scores = [-1] * GA_POPULATION_SIZE
@@ -218,14 +258,14 @@ def run_simulation():
                     if not agent.alive:
                         continue
                         
-                    diff_tensor, curr_frame = get_sensory_vector(offscreen_surf, agent.rect, prev_frames[i], agent.velocity)
+                    diff_tensor, curr_frame, disp_matrix = get_sensory_vector(offscreen_surf, agent.rect, prev_frames[i], agent.velocity)
                     prev_frames[i] = curr_frame
                     inputs[i] = diff_tensor
                     velocities[i] = agent.velocity
                     y_positions[i] = agent.y
                     
                     if i == leader_idx:
-                        masked_diff_leader = diff_tensor.reshape(4, 4)
+                        masked_diff_leader = disp_matrix
                         
                 flaps = batched_snn.step_batch(inputs, velocities, y_positions)
                 
@@ -266,7 +306,7 @@ def run_simulation():
         texts = [
             mode_text,
             f"ALIVE: {alive_count} / {len(world.agents)}",
-            f"CURRENT FITNESS: {int(current_score)}",
+            f"CURRENT FITNESS (Seed {current_seed}): {int(current_score)}",
             f"ALL-TIME RECORD: {int(all_time_record)}",
             f"MUT RATE: {mut_rate:.3f} | SCALE: {mut_scale:.3f}",
             f"SIM SPEED: {speed_multiplier}X {'(PAUSED)' if paused else ''}"
