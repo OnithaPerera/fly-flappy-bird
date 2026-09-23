@@ -6,7 +6,8 @@ from config import EYE_RES, ARENA_WIDTH, WINDOW_HEIGHT
 def get_sensory_vector(surface, bird_rect, prev_frame, bird_vel):
     """
     Crops a 160x160 region forward of the bird, downsamples to 32x32 grayscale,
-    compensates for vertical egomotion, and computes the 1024-element expansion tensor.
+    compensates for vertical egomotion, spatially pools to 4x4, and computes 
+    the 16-element expansion tensor.
     Returns: (flattened_tensor, current_downsampled_frame)
     """
     # Define crop region: 160x160 ahead of bird
@@ -30,7 +31,7 @@ def get_sensory_vector(surface, bird_rect, prev_frame, bird_vel):
     curr_frame = cv2.resize(frame_gray, (EYE_RES, EYE_RES), interpolation=cv2.INTER_AREA)
     
     if prev_frame is None:
-        return np.zeros(EYE_RES * EYE_RES, dtype=np.float32), curr_frame
+        return np.zeros(16, dtype=np.float32), curr_frame
         
     # Vertical egomotion shift
     shift_y = int(round(-bird_vel * 0.7))
@@ -41,7 +42,11 @@ def get_sensory_vector(surface, bird_rect, prev_frame, bird_vel):
     elif shift_y < 0:
         shifted_prev[shift_y:, :] = 0
         
-    diff = cv2.absdiff(curr_frame, shifted_prev).astype(np.float32)
+    # Spatial pooling to 4x4
+    pooled_curr = cv2.resize(curr_frame, (4, 4), interpolation=cv2.INTER_AREA)
+    pooled_prev = cv2.resize(shifted_prev, (4, 4), interpolation=cv2.INTER_AREA)
+        
+    diff = cv2.absdiff(pooled_curr, pooled_prev).astype(np.float32)
     
     # Cancel horizontal parallax scrolling
     diff = np.maximum(0, diff - np.median(diff, axis=1, keepdims=True))
@@ -51,11 +56,11 @@ def get_sensory_vector(surface, bird_rect, prev_frame, bird_vel):
     
     return diff.flatten(), curr_frame
 
-def get_colored_heatmap(matrix_32x32):
+def get_colored_heatmap(matrix_4x4):
     """
-    Applies a color map for the HUD thermal display.
+    Applies a color map for the HUD thermal display (4x4).
     """
-    disp_eye = matrix_32x32.copy()
+    disp_eye = matrix_4x4.copy()
     max_val = np.max(disp_eye)
     if max_val > 0:
         disp_eye = (disp_eye / max_val * 255).astype(np.uint8)

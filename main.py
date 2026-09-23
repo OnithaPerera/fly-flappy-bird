@@ -13,18 +13,23 @@ run_preflight_checks()
 from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, FPS,
                     COLOR_PANEL, COLOR_PHOSPHOR, COLOR_GRID, COLOR_LEADER, COLOR_TEXT, COLOR_ACCENT,
                     GA_POPULATION_SIZE, GA_ELITE_COUNT, INITIAL_MUT_RATE, MIN_MUT_RATE, INITIAL_MUT_SCALE, MIN_MUT_SCALE, DECAY_RATE,
-                    EYE_RES, EVAL_SEEDS, TOTAL_GENOME_SIZE, BOUND_BETA, BOUND_THRESH)
+                    EYE_RES, EVAL_SEEDS, TOTAL_GENOME_SIZE, 
+                    BOUND_DORSAL_W, BOUND_VENTRAL_W, BOUND_TONIC, BOUND_BETA, BOUND_THRESH, BOUND_HALTERE, BOUND_GROUND_GAIN)
 from game import SwarmWorld
 from vision import get_sensory_vector, get_colored_heatmap
-from connectome_lif import BatchedRecurrentSNN
+from connectome_lif import BatchedPooledBiologicalLIF
 from assets_loader import load_or_fetch_assets
 import sound_fx
 
 def generate_random_genome():
     genome = np.zeros(TOTAL_GENOME_SIZE, dtype=np.float32)
-    genome[0] = np.random.uniform(BOUND_BETA[0], BOUND_BETA[1])
-    genome[1] = np.random.uniform(BOUND_THRESH[0], BOUND_THRESH[1])
-    genome[2:] = np.random.normal(0, 0.01, TOTAL_GENOME_SIZE - 2)
+    genome[0:8] = np.random.uniform(BOUND_DORSAL_W[0], BOUND_DORSAL_W[1], 8)
+    genome[8:16] = np.random.uniform(BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1], 8)
+    genome[16] = np.random.uniform(BOUND_TONIC[0], BOUND_TONIC[1])
+    genome[17] = np.random.uniform(BOUND_BETA[0], BOUND_BETA[1])
+    genome[18] = np.random.uniform(BOUND_THRESH[0], BOUND_THRESH[1])
+    genome[19] = np.random.uniform(BOUND_HALTERE[0], BOUND_HALTERE[1])
+    genome[20] = np.random.uniform(BOUND_GROUND_GAIN[0], BOUND_GROUND_GAIN[1])
     return genome
 
 def run_simulation():
@@ -42,7 +47,7 @@ def run_simulation():
         print(f"Critical error loading assets: {e}")
         sys.exit(1)
         
-    batched_snn = BatchedRecurrentSNN(GA_POPULATION_SIZE)
+    batched_snn = BatchedPooledBiologicalLIF(GA_POPULATION_SIZE)
     initial_genomes = [generate_random_genome() for _ in range(GA_POPULATION_SIZE)]
     
     if os.path.exists("champion_genome.npy"):
@@ -107,7 +112,7 @@ def run_simulation():
                     if replay_mode:
                         if best_overall_genome is not None:
                             print(f"Entering Replay Mode for seed {all_time_record_seed}")
-                            batched_snn = BatchedRecurrentSNN(1)
+                            batched_snn = BatchedPooledBiologicalLIF(1)
                             batched_snn.set_genomes([best_overall_genome])
                             batched_snn.reset_states()
                             world = SwarmWorld(batched_snn.genomes, assets)
@@ -120,7 +125,7 @@ def run_simulation():
                             replay_mode = False
                     else:
                         print("Exiting Replay Mode. Resuming evolution...")
-                        batched_snn = BatchedRecurrentSNN(GA_POPULATION_SIZE)
+                        batched_snn = BatchedPooledBiologicalLIF(GA_POPULATION_SIZE)
                         batched_snn.set_genomes(initial_genomes)
                         batched_snn.reset_states()
                         world = SwarmWorld(batched_snn.genomes, assets)
@@ -198,15 +203,16 @@ def run_simulation():
                         prev_frames = [None] * GA_POPULATION_SIZE
                         break 
                 
-                offscreen_surf = world.render()
+                offscreen_surf = world.render_for_vision()
                 
                 N_active = len(world.agents)
-                inputs = np.zeros((N_active, 1024), dtype=np.float32)
+                inputs = np.zeros((N_active, 16), dtype=np.float32)
                 velocities = np.zeros(N_active, dtype=np.float32)
+                y_positions = np.zeros(N_active, dtype=np.float32)
                 
                 leader = world.get_leader()
                 leader_idx = world.agents.index(leader) if leader else -1
-                masked_diff_leader = np.zeros((EYE_RES, EYE_RES))
+                masked_diff_leader = np.zeros((4, 4))
                 
                 for i, agent in enumerate(world.agents):
                     if not agent.alive:
@@ -216,11 +222,12 @@ def run_simulation():
                     prev_frames[i] = curr_frame
                     inputs[i] = diff_tensor
                     velocities[i] = agent.velocity
+                    y_positions[i] = agent.y
                     
                     if i == leader_idx:
-                        masked_diff_leader = diff_tensor.reshape(32, 32)
+                        masked_diff_leader = diff_tensor.reshape(4, 4)
                         
-                flaps = batched_snn.step_batch(inputs, velocities)
+                flaps = batched_snn.step_batch(inputs, velocities, y_positions)
                 
                 if replay_mode:
                     flaps = np.array([world.frames in all_time_action_tape])
@@ -232,8 +239,9 @@ def run_simulation():
                 
         # Rendering
         screen.fill(COLOR_PANEL)
-        offscreen_surf = world.render()
-        screen.blit(offscreen_surf, (0, 0))
+        arena_surface = world.render_for_vision()
+        world.render_for_display(arena_surface)
+        screen.blit(arena_surface, (0, 0))
         
         # HUD Panel (Right side)
         hud_x = ARENA_WIDTH
@@ -254,6 +262,7 @@ def run_simulation():
         mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
         mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
         
+        y_coords = [20, 50, 80, 110, 140, 170]
         texts = [
             mode_text,
             f"ALIVE: {alive_count} / {len(world.agents)}",
@@ -266,15 +275,15 @@ def run_simulation():
         for i, t in enumerate(texts):
             color = COLOR_LEADER if replay_mode and i == 0 else (COLOR_PHOSPHOR if i == 0 else COLOR_TEXT)
             surf = font.render(t, True, color)
-            screen.blit(surf, (hud_x + 10, 10 + i * 25))
+            screen.blit(surf, (hud_x + 10, y_coords[i]))
             
         # Fitness Graph
-        graph_rect = pygame.Rect(hud_x + 10, 150, 420, 100)
+        g_label = font.render("MULTI-SEED FITNESS HISTORY", True, COLOR_TEXT)
+        screen.blit(g_label, (hud_x + 10, 205))
+        
+        graph_rect = pygame.Rect(hud_x + 10, 230, 420, 100)
         pygame.draw.rect(screen, (0, 0, 0), graph_rect)
         pygame.draw.rect(screen, COLOR_GRID, graph_rect, 1)
-        
-        g_label = font.render("MULTI-SEED FITNESS HISTORY", True, COLOR_TEXT)
-        screen.blit(g_label, (hud_x + 10, 130))
         
         if len(max_fitness_history) > 1 and not replay_mode:
             pts = []
@@ -290,20 +299,21 @@ def run_simulation():
             pygame.draw.lines(screen, COLOR_ACCENT, False, pts, 2)
             
         # Leader Brain View
-        lb_label = font.render("STABILIZED COMPOUND EYE", True, COLOR_TEXT)
-        screen.blit(lb_label, (hud_x + 10, 270))
+        lb_label = font.render("COMPOUND EYE (4x4 POOLED)", True, COLOR_TEXT)
+        screen.blit(lb_label, (hud_x + 10, 350))
         
         if leader:
             heatmap_rgb = get_colored_heatmap(masked_diff_leader)
             eye_surf = pygame.surfarray.make_surface(heatmap_rgb)
-            eye_surf = pygame.transform.scale(eye_surf, (150, 150))
-            screen.blit(eye_surf, (hud_x + 10, 290))
+            # Nearest neighbor scaling preserves the 4x4 grid pixel look
+            eye_surf = pygame.transform.scale(eye_surf, (100, 100))
+            screen.blit(eye_surf, (hud_x + 10, 375))
             
         # Giant Fiber Oscilloscope
         osc_label = font.render("GIANT FIBER VOLTAGE (Vm)", True, COLOR_TEXT)
-        screen.blit(osc_label, (hud_x + 10, 460))
+        screen.blit(osc_label, (hud_x + 10, 495))
         
-        osc_rect = pygame.Rect(hud_x + 10, 480, 420, 100)
+        osc_rect = pygame.Rect(hud_x + 10, 520, 420, 65)
         pygame.draw.rect(screen, (0, 0, 0), osc_rect)
         pygame.draw.rect(screen, COLOR_GRID, osc_rect, 1)
         
@@ -322,7 +332,7 @@ def run_simulation():
                 pygame.draw.lines(screen, (10, 150, 10), False, pts, 4)
                 pygame.draw.lines(screen, COLOR_PHOSPHOR, False, pts, 1)
                 
-            eff_t = float(batched_snn.v_thresh[0,0] + batched_snn.adaptive_thresh[0,0] if replay_mode else batched_snn.v_thresh[leader_idx,0] + batched_snn.adaptive_thresh[leader_idx,0])
+            eff_t = float(batched_snn.v_thresh[0,0] if replay_mode else batched_snn.v_thresh[leader_idx,0])
             thresh_y = float(osc_rect.y + osc_rect.height - ((eff_t - min_v) / v_range) * osc_rect.height)
             pygame.draw.line(screen, COLOR_LEADER, (osc_rect.x, thresh_y), (osc_rect.x + osc_rect.width, thresh_y), 1)
 

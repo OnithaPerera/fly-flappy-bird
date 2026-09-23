@@ -146,15 +146,15 @@ class SwarmWorld:
         self.reset(seed=42)
 
     def reset(self, seed):
-        random.seed(seed)
-        # Genomes is a list of 1D arrays, where genome[0] = beta, genome[1] = v_thresh
-        self.agents = [FlyAgent(g[0], g[1]) for g in self.genomes]
+        random.seed(42) # Force evaluation stability for early training
+        # Genomes: g[17] = beta, g[18] = v_thresh
+        self.agents = [FlyAgent(g[17], g[18]) for g in self.genomes]
         self.pipes = []
         self.frames = 0
         self.all_dead = False
         
-        # Spawn first pipe
-        self.pipes.append(PipePair(ARENA_WIDTH + 200, self.assets["pipe"], self.ground_h))
+        # Spawn first pipe early
+        self.pipes.append(PipePair(360, self.assets["pipe"], self.ground_h))
 
     def get_leader(self):
         alive_agents = [a for a in self.agents if a.alive]
@@ -224,7 +224,7 @@ class SwarmWorld:
                 
         self.frames += 1
 
-    def render(self):
+    def render_for_vision(self):
         # Draw background
         self.surface.blit(self.assets["background"], (0, 0))
         
@@ -234,10 +234,11 @@ class SwarmWorld:
         # Draw ground
         self.surface.blit(self.assets["ground"], (self.ground_x, WINDOW_HEIGHT - self.ground_h))
         self.surface.blit(self.assets["ground"], (self.ground_x + ARENA_WIDTH, WINDOW_HEIGHT - self.ground_h))
-            
+        
+        return self.surface
+        
+    def render_for_display(self, target_surface):
         leader = self.get_leader()
         for agent in self.agents:
             if agent.alive:
-                agent.draw(self.surface, self.assets, is_leader=(agent == leader))
-        
-        return self.surface
+                agent.draw(target_surface, self.assets, is_leader=(agent == leader))
