@@ -14,24 +14,23 @@ from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, FPS,
                     COLOR_PANEL, COLOR_PHOSPHOR, COLOR_GRID, COLOR_LEADER, COLOR_TEXT, COLOR_ACCENT,
                     GA_POPULATION_SIZE, GA_ELITE_COUNT, INITIAL_MUT_RATE, MIN_MUT_RATE, INITIAL_MUT_SCALE, MIN_MUT_SCALE, DECAY_RATE,
                     EYE_RES, EVAL_SEEDS, TOTAL_GENOME_SIZE, 
-                    BOUND_DORSAL_W, BOUND_VENTRAL_W, BOUND_VEL, BOUND_ALT, BOUND_TONIC, BOUND_BETA, BOUND_THRESH, BOUND_HALTERE)
+                    BOUND_W_CLIMB, BOUND_W_DIVE, BOUND_W_LOOMING, BOUND_W_VEL, BOUND_W_GROUND, BOUND_TONIC, BOUND_BETA, BOUND_THRESH)
 from game import SwarmWorld
 from vision import extract_forward_binary_grid, get_colored_heatmap
-from connectome_lif import VectorizedProprioceptiveSNN
+from connectome_lif import LobulaColumnarSNN
 from assets_loader import load_or_fetch_assets
 import sound_fx
 
 def generate_random_genome():
     genome = np.zeros(TOTAL_GENOME_SIZE, dtype=np.float32)
-    genome[0:32] = np.random.uniform(BOUND_DORSAL_W[0], BOUND_DORSAL_W[1], 32)
-    genome[32:64] = np.random.uniform(BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1], 32)
-    genome[64] = np.random.uniform(BOUND_ALT[0], BOUND_ALT[1])
-    genome[65] = np.random.uniform(BOUND_VEL[0], BOUND_VEL[1])
-    
-    genome[66] = np.random.uniform(BOUND_TONIC[0], BOUND_TONIC[1])
-    genome[67] = np.random.uniform(BOUND_BETA[0], BOUND_BETA[1])
-    genome[68] = np.random.uniform(BOUND_THRESH[0], BOUND_THRESH[1])
-    genome[69] = np.random.uniform(BOUND_HALTERE[0], BOUND_HALTERE[1])
+    genome[0] = np.random.uniform(BOUND_W_CLIMB[0], BOUND_W_CLIMB[1])
+    genome[1] = np.random.uniform(BOUND_W_DIVE[0], BOUND_W_DIVE[1])
+    genome[2] = np.random.uniform(BOUND_W_LOOMING[0], BOUND_W_LOOMING[1])
+    genome[3] = np.random.uniform(BOUND_W_VEL[0], BOUND_W_VEL[1])
+    genome[4] = np.random.uniform(BOUND_W_GROUND[0], BOUND_W_GROUND[1])
+    genome[5] = np.random.uniform(BOUND_TONIC[0], BOUND_TONIC[1])
+    genome[6] = np.random.uniform(BOUND_BETA[0], BOUND_BETA[1])
+    genome[7] = np.random.uniform(BOUND_THRESH[0], BOUND_THRESH[1])
     return genome
 
 def run_simulation():
@@ -49,7 +48,7 @@ def run_simulation():
         print(f"Critical error loading assets: {e}")
         sys.exit(1)
         
-    batched_snn = VectorizedProprioceptiveSNN(GA_POPULATION_SIZE)
+    batched_snn = LobulaColumnarSNN(GA_POPULATION_SIZE)
     initial_genomes = [generate_random_genome() for _ in range(GA_POPULATION_SIZE)]
     
     if os.path.exists("champion_genome.npy"):
@@ -72,9 +71,7 @@ def run_simulation():
     current_seed = EVAL_SEEDS[current_eval_idx]
     world.reset(current_seed)
     batched_snn.reset_states()
-    
-    prev_frames = [None] * GA_POPULATION_SIZE
-    
+    batched_snn.reset_states()
     generation = 1
     max_fitness_history = []
     all_time_record = 0
@@ -115,7 +112,7 @@ def run_simulation():
                     if replay_mode:
                         if best_overall_genome is not None:
                             print(f"Entering Replay Mode for seed {all_time_record_seed}")
-                            batched_snn = VectorizedProprioceptiveSNN(1)
+                            batched_snn = LobulaColumnarSNN(1)
                             batched_snn.set_genomes([best_overall_genome])
                             batched_snn.reset_states()
                             world = SwarmWorld(batched_snn.genomes, assets)
@@ -127,7 +124,7 @@ def run_simulation():
                             replay_mode = False
                     else:
                         print("Exiting Replay Mode. Resuming evolution...")
-                        batched_snn = VectorizedProprioceptiveSNN(GA_POPULATION_SIZE)
+                        batched_snn = LobulaColumnarSNN(GA_POPULATION_SIZE)
                         batched_snn.set_genomes(initial_genomes)
                         batched_snn.reset_states()
                         world = SwarmWorld(batched_snn.genomes, assets)
@@ -164,7 +161,10 @@ def run_simulation():
                         batched_snn.reset_states()
                         break
                     else:
-                        avg_fitnesses = np.mean(agent_scores_per_seed, axis=1) # dual-seed blended average
+                        s1 = agent_scores_per_seed[:, 0]
+                        s2 = agent_scores_per_seed[:, 1]
+                        # Harmonic Scoring: severely punishes extreme specialists
+                        avg_fitnesses = 2.0 * (s1 * s2) / (s1 + s2 + 1e-5)
                         best_idx = int(np.argmax(avg_fitnesses))
                         gen_max_fitness = avg_fitnesses[best_idx]
                         max_fitness_history.append(gen_max_fitness)
@@ -246,13 +246,13 @@ def run_simulation():
                 offscreen_surf = world.render_for_vision()
                 
                 N_active = len(world.agents)
-                inputs = np.zeros((N_active, 66), dtype=np.float32)
+                inputs = np.zeros((N_active, 4), dtype=np.float32)
                 y_positions = np.zeros(N_active, dtype=np.float32)
                 
                 leader = world.get_leader()
                 leader_idx = world.agents.index(leader) if leader else -1
                 
-                # Single-pass vision
+                # Single-pass vision for HUD only
                 vision_x = leader.x if leader else 60.0
                 shared_grid, disp_matrix = extract_forward_binary_grid(offscreen_surf, vision_x)
                 
@@ -260,10 +260,23 @@ def run_simulation():
                     if not agent.alive:
                         continue
                         
-                    # Build 66-element input
-                    inputs[i, 0:64] = shared_grid
-                    inputs[i, 64] = agent.y / 500.0
-                    inputs[i, 65] = np.clip(agent.velocity / 10.0, -1.0, 1.0)
+                    closest_pipe = next((p for p in world.pipes if p.x + p.width > agent.x), None)
+                    if closest_pipe:
+                        looming = max(0.0, 1.0 - (max(0, closest_pipe.x - agent.x) / 300.0))
+                        gap_offset = (agent.y - closest_pipe.gap_y) / 200.0
+                    else:
+                        looming = 0.0
+                        gap_offset = (agent.y - 250.0) / 200.0
+                        
+                    vel = np.clip(agent.velocity / 10.0, -1.0, 1.0)
+                    ground = max(0.0, (agent.y - 380.0) / 100.0)
+                        
+                    # Build 4-element input
+                    inputs[i, 0] = looming
+                    inputs[i, 1] = gap_offset
+                    inputs[i, 2] = vel
+                    inputs[i, 3] = ground
+                    
                     y_positions[i] = agent.y
                     
                 flaps = batched_snn.step_batch(inputs, y_positions)
@@ -301,11 +314,17 @@ def run_simulation():
         mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
         mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
         
+        if leader and leader_idx != -1:
+            s1 = int(agent_scores_per_seed[leader_idx, 0]) if current_eval_idx > 0 else int(current_score)
+            s2 = int(current_score) if current_eval_idx == 1 else 0
+        else:
+            s1, s2 = 0, 0
+            
         y_coords = [20, 50, 80, 110, 140, 170]
         texts = [
             mode_text,
             f"ALIVE: {alive_count} / {len(world.agents)}",
-            f"CURRENT FITNESS (Seed {current_seed}): {int(current_score)}",
+            f"SCORE 101: {s1} | SCORE 202: {s2}",
             f"ALL-TIME RECORD: {int(all_time_record)}",
             f"MUT RATE: {mut_rate:.3f} | SCALE: {mut_scale:.3f}",
             f"SIM SPEED: {speed_multiplier}X {'(PAUSED)' if paused else ''}"

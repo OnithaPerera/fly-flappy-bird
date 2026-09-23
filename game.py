@@ -150,8 +150,8 @@ class SwarmWorld:
 
     def reset(self, seed):
         random.seed(seed)
-        # Genomes: g[17] = beta, g[18] = v_thresh
-        self.agents = [FlyAgent(g[17], g[18]) for g in self.genomes]
+        # Genomes: g[6] = beta, g[7] = v_thresh
+        self.agents = [FlyAgent(g[6], g[7]) for g in self.genomes]
         self.pipes = []
         self.frames = 0
         self.all_dead = False
@@ -184,7 +184,7 @@ class SwarmWorld:
                     if closest_pipe:
                         gap_center_y = closest_pipe.gap_y
                         dist = abs(agent.y - gap_center_y)
-                        agent.gap_alignment_reward += max(0.0, 1.0 - (dist / 140.0)) * 10.0
+                        agent.gap_alignment_reward += max(0.0, 1.0 - (dist / 140.0)) * 15.0
                         
                         # Smoothness Reward
                         if closest_pipe.x <= agent.x <= closest_pipe.x + closest_pipe.width:

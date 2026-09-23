@@ -22,11 +22,13 @@ def extract_forward_binary_grid(surface, bird_x):
     
     frame_gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
     
-    # Apply binary thresholding: sky is bright, obstacles are dark
-    # Assuming sky is generally > 150, pipes and ground are darker.
-    # In flappy bird, sky is usually light blue (~200), pipes are green (~100-150)
-    # We will use inverted binary so obstacles become 255 (1.0) and sky 0 (0.0).
-    _, binary_frame = cv2.threshold(frame_gray, 180, 255, cv2.THRESH_BINARY_INV)
+    # We will use normal binary thresholding so obstacles (darker) become 255 (1.0) and sky (brighter) becomes 0.
+    # Wait, sky is bright cyan (~180-220 grayscale) and pipes are green (~120-150 grayscale).
+    # THRESH_BINARY_INV means > thresh -> 0, < thresh -> 255.
+    # If sky was yellow (255), it means sky was < thresh. So the sky value was < 180.
+    # To fix this, we should lower the threshold to 100, or just use cv2.THRESH_OTSU.
+    # Let's use THRESH_OTSU with THRESH_BINARY_INV.
+    _, binary_frame = cv2.threshold(frame_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
     # Downsample to 8x8 grid using block averaging
     pooled_curr = cv2.resize(binary_frame, (8, 8), interpolation=cv2.INTER_AREA)

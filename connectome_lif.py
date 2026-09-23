@@ -1,11 +1,11 @@
 import numpy as np
 from config import (V_REST, V_RESET, V_THRESH, BETA, REFRACTORY_FRAMES,
-                    BOUND_BETA, BOUND_THRESH, HALTERE_DAMPING,
-                    BOUND_DORSAL_W, BOUND_VENTRAL_W, BOUND_TONIC,
-                    BOUND_ALT, BOUND_VEL,
-                    INPUT_NODES, OUTPUT_NODES, GA_POPULATION_SIZE, TOTAL_GENOME_SIZE)
+                    BOUND_BETA, BOUND_THRESH,
+                    BOUND_W_CLIMB, BOUND_W_DIVE, BOUND_W_LOOMING,
+                    BOUND_W_VEL, BOUND_W_GROUND, BOUND_TONIC,
+                    OUTPUT_NODES, GA_POPULATION_SIZE, TOTAL_GENOME_SIZE)
 
-class VectorizedProprioceptiveSNN:
+class LobulaColumnarSNN:
     def __init__(self, num_agents=GA_POPULATION_SIZE):
         self.N = num_agents
         
@@ -15,35 +15,34 @@ class VectorizedProprioceptiveSNN:
         self.voltage_history = []
         
         # Genomes/weights (Batched)
-        self.W_dorsal = np.zeros((self.N, 32), dtype=np.float32)
-        self.W_ventral = np.zeros((self.N, 32), dtype=np.float32)
-        self.W_alt = np.zeros((self.N, 1), dtype=np.float32)
+        self.W_climb = np.zeros((self.N, 1), dtype=np.float32)
+        self.W_dive = np.zeros((self.N, 1), dtype=np.float32)
+        self.W_looming = np.zeros((self.N, 1), dtype=np.float32)
         self.W_vel = np.zeros((self.N, 1), dtype=np.float32)
+        self.W_ground = np.zeros((self.N, 1), dtype=np.float32)
         
         self.I_tonic = np.zeros((self.N, 1), dtype=np.float32)
         self.beta = np.zeros((self.N, 1), dtype=np.float32)
         self.v_thresh = np.zeros((self.N, 1), dtype=np.float32)
-        self.haltere_damping = np.zeros((self.N, 1), dtype=np.float32)
         
         self.genomes = np.zeros((self.N, TOTAL_GENOME_SIZE), dtype=np.float32)
 
     def set_genomes(self, list_of_vectors):
         """
-        Loads a list of 1D genomes (size 70) into the batched weight arrays.
+        Loads a list of 1D genomes (size 8) into the batched weight arrays.
         """
         for i, genome in enumerate(list_of_vectors):
             self.genomes[i] = genome
             
-            # Extract 70 parameters
-            self.W_dorsal[i] = genome[0:32]
-            self.W_ventral[i] = genome[32:64]
-            self.W_alt[i, 0] = genome[64]
-            self.W_vel[i, 0] = genome[65]
-            
-            self.I_tonic[i, 0] = genome[66]
-            self.beta[i, 0] = genome[67]
-            self.v_thresh[i, 0] = genome[68]
-            self.haltere_damping[i, 0] = genome[69]
+            # Extract 8 parameters
+            self.W_climb[i, 0] = genome[0]
+            self.W_dive[i, 0] = genome[1]
+            self.W_looming[i, 0] = genome[2]
+            self.W_vel[i, 0] = genome[3]
+            self.W_ground[i, 0] = genome[4]
+            self.I_tonic[i, 0] = genome[5]
+            self.beta[i, 0] = genome[6]
+            self.v_thresh[i, 0] = genome[7]
             
     def get_elite_genomes(self, elite_indices):
         return [self.genomes[i].copy() for i in elite_indices]
@@ -65,17 +64,14 @@ class VectorizedProprioceptiveSNN:
             child += mask * mutations
             
             # Enforce bounds
-            child[0:32] = np.clip(child[0:32], BOUND_DORSAL_W[0], BOUND_DORSAL_W[1])
-            child[32:64] = np.clip(child[32:64], BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1])
-            child[64] = np.clip(child[64], BOUND_ALT[0], BOUND_ALT[1])
-            child[65] = np.clip(child[65], BOUND_VEL[0], BOUND_VEL[1])
-            
-            child[66] = np.clip(child[66], BOUND_TONIC[0], BOUND_TONIC[1])
-            child[67] = np.clip(child[67], BOUND_BETA[0], BOUND_BETA[1])
-            child[68] = np.clip(child[68], BOUND_THRESH[0], BOUND_THRESH[1])
-            # We don't have BOUND_HALTERE anymore? No we still need it. Let's add it back if we can.
-            # I'll just use a generic bound or [0.1, 0.5] like before. Let's use [0.1, 0.5].
-            child[69] = np.clip(child[69], 0.1, 0.5)
+            child[0] = np.clip(child[0], BOUND_W_CLIMB[0], BOUND_W_CLIMB[1])
+            child[1] = np.clip(child[1], BOUND_W_DIVE[0], BOUND_W_DIVE[1])
+            child[2] = np.clip(child[2], BOUND_W_LOOMING[0], BOUND_W_LOOMING[1])
+            child[3] = np.clip(child[3], BOUND_W_VEL[0], BOUND_W_VEL[1])
+            child[4] = np.clip(child[4], BOUND_W_GROUND[0], BOUND_W_GROUND[1])
+            child[5] = np.clip(child[5], BOUND_TONIC[0], BOUND_TONIC[1])
+            child[6] = np.clip(child[6], BOUND_BETA[0], BOUND_BETA[1])
+            child[7] = np.clip(child[7], BOUND_THRESH[0], BOUND_THRESH[1])
             
             new_genomes.append(child)
             
@@ -89,7 +85,11 @@ class VectorizedProprioceptiveSNN:
     def step_batch(self, inputs_batch, y_positions_N):
         """
         Vectorized LIF simulation step for the entire swarm.
-        inputs_batch: shape (N, 66) - [Shared_Grid_64, Altitudes_40, Velocities_40]
+        inputs_batch: shape (N, 4)
+           col 0: looming_drive
+           col 1: gap_vertical_offset
+           col 2: vertical_velocity
+           col 3: ground_hazard
         y_positions_N: shape (N,)
         Returns boolean array of shape (N,) indicating flaps.
         """
@@ -98,26 +98,26 @@ class VectorizedProprioceptiveSNN:
         self.gf_v[~active_mask] = V_RESET
         
         # Split inputs
-        dorsal_inputs = inputs_batch[:, 0:32]
-        ventral_inputs = inputs_batch[:, 32:64]
-        alt_inputs = inputs_batch[:, 64:65]
-        vel_inputs = inputs_batch[:, 65:66]
+        looming = inputs_batch[:, 0:1]
+        gap_offset = inputs_batch[:, 1:2]
+        vel = inputs_batch[:, 2:3]
+        ground = inputs_batch[:, 3:4]
         
-        # Compute visual currents
-        I_dorsal = np.sum(dorsal_inputs * self.W_dorsal, axis=1, keepdims=True)
-        I_ventral = np.sum(ventral_inputs * self.W_ventral, axis=1, keepdims=True)
+        pos_offset = np.maximum(0, gap_offset)
+        neg_offset = np.minimum(0, gap_offset)
         
-        # Compute proprioceptive currents
-        I_alt = alt_inputs * self.W_alt
-        I_vel = vel_inputs * self.W_vel
-        
-        # Net current
-        I_net = I_ventral + I_dorsal + I_alt + I_vel + self.I_tonic
+        I_net = (pos_offset * self.W_climb + 
+                 neg_offset * self.W_dive + 
+                 looming * self.W_looming + 
+                 vel * self.W_vel + 
+                 ground * self.W_ground + 
+                 self.I_tonic)
         
         # Ground Emergency Reflex (y > 420)
+        # Note: We already have ground_hazard, but keeping this extra safeguard just in case
         ground_mask = y_positions_N > 420.0
-        I_ground = (y_positions_N[ground_mask] - 420.0) * 0.15
-        I_net[ground_mask, 0] += I_ground
+        I_ground_emergency = (y_positions_N[ground_mask] - 420.0) * 0.15
+        I_net[ground_mask, 0] += I_ground_emergency
         
         # Update membrane potential
         self.gf_v[active_mask] = (self.gf_v[active_mask] - V_REST) * self.beta[active_mask] + V_REST + I_net[active_mask]
