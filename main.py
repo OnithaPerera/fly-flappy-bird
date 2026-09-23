@@ -283,8 +283,8 @@ def run_simulation():
             val_range = max(1, max_val - min_val)
             
             for i, val in enumerate(max_fitness_history):
-                x = graph_rect.x + (i / max(1, len(max_fitness_history) - 1)) * graph_rect.width
-                y = graph_rect.y + graph_rect.height - ((val - min_val) / val_range) * graph_rect.height
+                x = float(graph_rect.x + (i / max(1, len(max_fitness_history) - 1)) * graph_rect.width)
+                y = float(graph_rect.y + graph_rect.height - ((val - min_val) / val_range) * graph_rect.height)
                 pts.append((x, y))
                 
             pygame.draw.lines(screen, COLOR_ACCENT, False, pts, 2)
