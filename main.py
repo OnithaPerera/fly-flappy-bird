@@ -73,7 +73,7 @@ def run_simulation():
     world.reset(current_seed)
     batched_snn.reset_states()
     
-    lab_rect = (ARENA_WIDTH, 0, LAB_WIDTH, 500)
+    lab_rect = (ARENA_WIDTH, 0, LAB_WIDTH, 680)
     brain_visualizer = BrainVisualizer(lab_rect)
     generation = 1
     max_fitness_history = []
