@@ -1,11 +1,14 @@
 import numpy as np
-from config import (V_REST, V_RESET, V_THRESH, BETA, REFRACTORY_PERIOD, SYNAPTIC_GAIN, EYE_RES,
-                    BOUND_BETA, BOUND_THRESH, BOUND_GAIN, BOUND_WEIGHT, HALTERE_DAMPING)
+from config import (V_REST, V_RESET, V_THRESH, BETA, REFRACTORY_FRAMES, SYNAPTIC_GAIN, EYE_RES,
+                    BOUND_BETA, BOUND_THRESH, BOUND_GAIN, BOUND_WEIGHT, HALTERE_DAMPING,
+                    ADAPTIVE_THRESH_INCREMENT, ADAPTIVE_THRESH_DECAY)
 
 class LoomingCircuitController:
     def __init__(self, genome=None):
         self.v = V_REST
         self.refractory_timer = 0
+        self.adaptive_thresh = 0.0
+        self.history_frames = 0
         self.voltage_history = []
         self.genome_enabled = False
         
@@ -74,11 +77,12 @@ class LoomingCircuitController:
         
     def step(self, total_drive, vertical_velocity):
         """
-        Leaky Integrate-and-Fire simulation step with Haltere proprioception.
+        Leaky Integrate-and-Fire simulation step with Haltere proprioception and SFA.
         """
         if self.refractory_timer > 0:
             self.refractory_timer -= 1
             self.v = V_RESET
+            self.adaptive_thresh *= ADAPTIVE_THRESH_DECAY
             self.voltage_history.append(self.v)
             return False
             
@@ -86,14 +90,18 @@ class LoomingCircuitController:
         if vertical_velocity < 0:
             total_drive *= HALTERE_DAMPING
             
+        effective_thresh = self.v_thresh + self.adaptive_thresh
+            
         # LIF Equation
         self.v = (self.v - V_REST) * self.beta + V_REST + (total_drive * self.synaptic_gain)
+        self.adaptive_thresh *= ADAPTIVE_THRESH_DECAY
         
         self.voltage_history.append(self.v)
         
-        if self.v >= self.v_thresh:
+        if self.v >= effective_thresh:
             self.v = V_RESET
-            self.refractory_timer = 7 # 7 frames absolute refractory
+            self.adaptive_thresh += ADAPTIVE_THRESH_INCREMENT
+            self.refractory_timer = REFRACTORY_FRAMES
             return True
             
         return False

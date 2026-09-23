@@ -20,37 +20,45 @@ def preprocess_frame(surface):
 
 from config import EYE_RES, LPI_INHIBITION_WEIGHT
 
-def compute_looming_stimulus(curr_frame, prev_frame, spatial_weights=None):
+def compute_temporal_looming(curr_frame, prev_frame_1, prev_frame_2, spatial_weights=None):
     """
-    Calculates absolute luminance difference to detect expanding edges (looming).
+    Calculates 3-frame temporal expansion tensor.
     Splits field into Ventral (excitatory) and Dorsal (inhibitory) zones.
     """
-    if prev_frame is None:
+    if prev_frame_1 is None or prev_frame_2 is None:
         return 0.0, np.zeros((EYE_RES, EYE_RES), dtype=np.float32)
         
-    diff = cv2.absdiff(curr_frame, prev_frame).astype(np.float32)
+    D1 = cv2.absdiff(curr_frame, prev_frame_1).astype(np.float32)
+    D2 = cv2.absdiff(prev_frame_1, prev_frame_2).astype(np.float32)
+    
+    # Cancel horizontal parallax scrolling by subtracting median row displacement
+    D1 = np.maximum(0, D1 - np.median(D1, axis=1, keepdims=True))
+    D2 = np.maximum(0, D2 - np.median(D2, axis=1, keepdims=True))
+    
+    # Optical Looming Acceleration
+    looming = D1 + np.maximum(0.0, D1 - D2)
     
     if spatial_weights is None:
         spatial_weights = np.ones((EYE_RES, EYE_RES), dtype=np.float32)
-        spatial_weights[0:EYE_RES//2, :] = 0.2
-        spatial_weights[EYE_RES//2:, :] = 2.0
+        spatial_weights[0:13, :] = 0.2
+        spatial_weights[13:, :] = 2.0
     
     if isinstance(spatial_weights, list):
         spatial_weights = np.array(spatial_weights, dtype=np.float32)
         
-    masked_diff = diff * spatial_weights
+    masked_looming = looming * spatial_weights
     
-    # Ventral (Lower 60%)
-    split_idx = int(EYE_RES * 0.4)
-    ventral_diff = masked_diff[split_idx:, :]
-    dorsal_diff = masked_diff[:split_idx, :]
+    # Ventral (rows 13 to 31, excitatory)
+    # Dorsal (rows 0 to 12, inhibitory)
+    ventral = masked_looming[13:, :]
+    dorsal = masked_looming[:13, :]
     
-    i_excitatory = np.sum(ventral_diff)
-    i_inhibitory = np.sum(dorsal_diff)
+    i_excitatory = np.sum(ventral)
+    i_inhibitory = np.sum(dorsal)
     
     total_drive = i_excitatory - (i_inhibitory * LPI_INHIBITION_WEIGHT)
     
-    return total_drive, masked_diff
+    return total_drive, masked_looming
 
 def get_colored_heatmap(matrix_32x32):
     """

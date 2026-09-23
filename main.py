@@ -1,6 +1,8 @@
 import sys
 import os
+# pyrefly: ignore [missing-import]
 import pygame
+# pyrefly: ignore [missing-import]
 import numpy as np
 import random
 import time
@@ -10,10 +12,10 @@ run_preflight_checks()
 
 from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, FPS,
                     COLOR_PANEL, COLOR_PHOSPHOR, COLOR_GRID, COLOR_LEADER, COLOR_TEXT, COLOR_ACCENT,
-                    GA_POPULATION_SIZE, GA_ELITE_COUNT, GA_MUTATION_RATE, GA_MUTATION_SCALE,
+                    GA_POPULATION_SIZE, GA_ELITE_COUNT, INITIAL_MUT_RATE, MIN_MUT_RATE, INITIAL_MUT_SCALE, MIN_MUT_SCALE, DECAY_RATE,
                     EYE_RES)
 from game import SwarmWorld
-from vision import preprocess_frame, compute_looming_stimulus, get_colored_heatmap
+from vision import preprocess_frame, compute_temporal_looming, get_colored_heatmap
 from connectome_lif import LoomingCircuitController
 from assets_loader import load_or_fetch_assets
 import sound_fx
@@ -45,10 +47,10 @@ def run_simulation():
     population = initialize_population(GA_POPULATION_SIZE)
     world = SwarmWorld(population, assets)
     
-    current_seed = int(time.time())
+    current_seed = (0 // 5) * 42
     world.reset(current_seed)
     
-    prev_frames = [None] * GA_POPULATION_SIZE
+    prev_frames = [(None, None)] * GA_POPULATION_SIZE
     
     generation = 1
     max_fitness_history = []
@@ -87,7 +89,7 @@ def run_simulation():
                             replay_brain = LoomingCircuitController(genome=best_overall_genome)
                             world = SwarmWorld([replay_brain], assets)
                             world.reset(all_time_record_seed)
-                            prev_frames = [None]
+                            prev_frames = [(None, None)]
                             paused = False
                             speed_multiplier = 1
                         else:
@@ -97,7 +99,7 @@ def run_simulation():
                         print("Exiting Replay Mode. Resuming evolution...")
                         world = SwarmWorld(population, assets)
                         world.reset(current_seed)
-                        prev_frames = [None] * GA_POPULATION_SIZE
+                        prev_frames = [(None, None)] * GA_POPULATION_SIZE
                         paused = False
                 elif event.key == pygame.K_s:
                     if best_overall_genome is not None:
@@ -110,7 +112,7 @@ def run_simulation():
                     if replay_mode:
                         # In replay mode, just loop the replay
                         world.reset(all_time_record_seed)
-                        prev_frames = [None]
+                        prev_frames = [(None, None)]
                         break
                         
                     # Evolution step
@@ -137,20 +139,23 @@ def run_simulation():
                     for i in range(GA_ELITE_COUNT):
                         next_population.append(agents[i].brain.clone())
                         
+                    mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
+                    mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
+                        
                     # Tournament selection and mutation
                     while len(next_population) < GA_POPULATION_SIZE:
                         # Tournament size 3
                         tourney = random.sample(agents, 3)
                         winner = max(tourney, key=lambda a: a.get_fitness())
                         child = winner.brain.clone()
-                        child.mutate(GA_MUTATION_RATE, GA_MUTATION_SCALE)
+                        child.mutate(mut_rate, mut_scale)
                         next_population.append(child)
                         
                     population = next_population
                     world = SwarmWorld(population, assets)
-                    current_seed = int(time.time()) + generation
+                    current_seed = (generation // 5) * 42
                     world.reset(current_seed)
-                    prev_frames = [None] * GA_POPULATION_SIZE
+                    prev_frames = [(None, None)] * GA_POPULATION_SIZE
                     generation += 1
                     break # Break out of substeps to render the new generation
                 
@@ -173,8 +178,9 @@ def run_simulation():
                         flaps.append(False)
                         continue
                         
-                    drive, masked_diff = compute_looming_stimulus(curr_frame, prev_frames[i], agent.brain.spatial_weights)
-                    prev_frames[i] = curr_frame
+                    prev1, prev2 = prev_frames[i]
+                    drive, masked_diff = compute_temporal_looming(curr_frame, prev1, prev2, agent.brain.spatial_weights)
+                    prev_frames[i] = (curr_frame, prev1)
                     
                     if i == leader_idx:
                         masked_diff_leader = masked_diff
@@ -211,11 +217,15 @@ def run_simulation():
         
         mode_text = "REPLAY MODE" if replay_mode else f"GENERATION: {generation}"
         
+        mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
+        mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
+        
         texts = [
             mode_text,
             f"ALIVE: {alive_count} / {len(world.agents)}",
-            f"CURRENT FITNESS: {current_score}",
-            f"ALL-TIME RECORD: {all_time_record}",
+            f"CURRENT FITNESS: {int(current_score)}",
+            f"ALL-TIME RECORD: {int(all_time_record)}",
+            f"MUT RATE: {mut_rate:.3f} | SCALE: {mut_scale:.3f}",
             f"SIM SPEED: {speed_multiplier}X {'(PAUSED)' if paused else ''}"
         ]
         
@@ -278,7 +288,8 @@ def run_simulation():
                 pygame.draw.lines(screen, (10, 150, 10), False, pts, 4)
                 pygame.draw.lines(screen, COLOR_PHOSPHOR, False, pts, 1)
                 
-            thresh_y = osc_rect.y + osc_rect.height - ((leader.brain.v_thresh - min_v) / v_range) * osc_rect.height
+            effective_thresh = leader.brain.v_thresh + leader.brain.adaptive_thresh
+            thresh_y = osc_rect.y + osc_rect.height - ((effective_thresh - min_v) / v_range) * osc_rect.height
             pygame.draw.line(screen, COLOR_LEADER, (osc_rect.x, thresh_y), (osc_rect.x + osc_rect.width, thresh_y), 1)
 
         # Pause Overlay

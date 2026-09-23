@@ -3,7 +3,7 @@ import random
 import math
 import numpy as np
 from config import (ARENA_WIDTH, WINDOW_HEIGHT, GRAVITY, FLAP_STRENGTH, 
-                    PIPE_SPEED, PIPE_SPACING, PIPE_GAP)
+                    PIPE_SPEED, PIPE_SPACING, PIPE_GAP, CEILING_DEATH_PENALTY)
 
 class FlyAgent:
     def __init__(self, brain):
@@ -21,6 +21,7 @@ class FlyAgent:
         self.score = 0
         self.frames_survived = 0
         self.ceiling_hits = 0
+        self.gap_alignment_reward = 0.0
         
         # Generate lineage color
         self.color = self._generate_color()
@@ -51,14 +52,15 @@ class FlyAgent:
         else:
             self.is_flapping = False
             
-        if self.y < 10:
-            self.y = 10
+        if self.y <= 0:
+            self.y = 0
             self.velocity = 0
             self.rect.y = 0
+            self.alive = False
             self.ceiling_hits += 1
 
     def get_fitness(self):
-        return self.frames_survived + (self.score * 1000) - (self.ceiling_hits * 100)
+        return self.frames_survived + (self.score * 1500) + self.gap_alignment_reward - (self.ceiling_hits * CEILING_DEATH_PENALTY)
 
     def draw(self, surface, assets, is_leader=False):
         if not self.alive: return
@@ -165,6 +167,14 @@ class SwarmWorld:
                 if flaps[i]:
                     agent.flap()
                 agent.update()
+                
+                # Gap alignment reward
+                if agent.alive:
+                    closest_pipe = next((p for p in self.pipes if p.x + p.width > agent.x), None)
+                    if closest_pipe:
+                        gap_center = closest_pipe.gap_y
+                        dist = abs(agent.y - gap_center)
+                        agent.gap_alignment_reward += max(0.0, 1.0 - dist / 200.0) * 5.0
         
         # Spawn pipes based on distance
         if len(self.pipes) > 0 and (ARENA_WIDTH - self.pipes[-1].x) >= PIPE_SPACING:
