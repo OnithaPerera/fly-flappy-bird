@@ -10,7 +10,7 @@ import time
 from diagnostics import run_preflight_checks, validate_frame_tensor
 run_preflight_checks() 
 
-from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, FPS,
+from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, LAB_WIDTH, FPS,
                     COLOR_PANEL, COLOR_PHOSPHOR, COLOR_GRID, COLOR_LEADER, COLOR_TEXT, COLOR_ACCENT,
                     GA_POPULATION_SIZE, GA_ELITE_COUNT, INITIAL_MUT_RATE, MIN_MUT_RATE, INITIAL_MUT_SCALE, MIN_MUT_SCALE, DECAY_RATE,
                     EYE_RES, EVAL_SEEDS, TOTAL_GENOME_SIZE, 
@@ -18,6 +18,7 @@ from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, FPS,
 from game import SwarmWorld
 from vision import extract_forward_binary_grid, get_colored_heatmap
 from connectome_lif import LobulaColumnarSNN
+from brain_visualizer import BrainVisualizer
 from assets_loader import load_or_fetch_assets
 import sound_fx
 
@@ -71,7 +72,9 @@ def run_simulation():
     current_seed = EVAL_SEEDS[current_eval_idx]
     world.reset(current_seed)
     batched_snn.reset_states()
-    batched_snn.reset_states()
+    
+    lab_rect = (ARENA_WIDTH, 0, LAB_WIDTH, 500)
+    brain_visualizer = BrainVisualizer(lab_rect)
     generation = 1
     max_fitness_history = []
     all_time_record = 0
@@ -134,6 +137,12 @@ def run_simulation():
                     if best_overall_genome is not None:
                         np.save("champion_genome.npy", best_overall_genome)
                         print("Saved champion genome.")
+                elif event.key == pygame.K_F11:
+                    is_fullscreen = screen.get_flags() & pygame.FULLSCREEN
+                    if is_fullscreen:
+                        screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+                    else:
+                        screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.FULLSCREEN | pygame.SCALED)
 
         if not paused:
             for substep in range(speed_multiplier):
@@ -208,15 +217,14 @@ def run_simulation():
                                 mutations = np.random.normal(0, mut_scale, TOTAL_GENOME_SIZE)
                                 child += mask * mutations
                                 
-                                child[0:32] = np.clip(child[0:32], BOUND_DORSAL_W[0], BOUND_DORSAL_W[1])
-                                child[32:64] = np.clip(child[32:64], BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1])
-                                child[64] = np.clip(child[64], BOUND_ALT[0], BOUND_ALT[1])
-                                child[65] = np.clip(child[65], BOUND_VEL[0], BOUND_VEL[1])
-                                
-                                child[66] = np.clip(child[66], BOUND_TONIC[0], BOUND_TONIC[1])
-                                child[67] = np.clip(child[67], BOUND_BETA[0], BOUND_BETA[1])
-                                child[68] = np.clip(child[68], BOUND_THRESH[0], BOUND_THRESH[1])
-                                child[69] = np.clip(child[69], BOUND_HALTERE[0], BOUND_HALTERE[1])
+                                child[0] = np.clip(child[0], BOUND_W_CLIMB[0], BOUND_W_CLIMB[1])
+                                child[1] = np.clip(child[1], BOUND_W_DIVE[0], BOUND_W_DIVE[1])
+                                child[2] = np.clip(child[2], BOUND_W_LOOMING[0], BOUND_W_LOOMING[1])
+                                child[3] = np.clip(child[3], BOUND_W_VEL[0], BOUND_W_VEL[1])
+                                child[4] = np.clip(child[4], BOUND_W_GROUND[0], BOUND_W_GROUND[1])
+                                child[5] = np.clip(child[5], BOUND_TONIC[0], BOUND_TONIC[1])
+                                child[6] = np.clip(child[6], BOUND_BETA[0], BOUND_BETA[1])
+                                child[7] = np.clip(child[7], BOUND_THRESH[0], BOUND_THRESH[1])
                                 new_genomes.append(child)
                                 
                             # Add random agents
@@ -295,12 +303,20 @@ def run_simulation():
         world.render_for_display(arena_surface)
         screen.blit(arena_surface, (0, 0))
         
-        # HUD Panel (Right side)
-        hud_x = ARENA_WIDTH
-        
+        # Center Deck: Neurophysiology Lab
+        lab_x = ARENA_WIDTH
         for y in range(0, WINDOW_HEIGHT, 40):
-            pygame.draw.line(screen, COLOR_GRID, (hud_x, y), (hud_x + HUD_WIDTH, y))
-        for x in range(hud_x, hud_x + HUD_WIDTH, 40):
+            pygame.draw.line(screen, COLOR_GRID, (lab_x, y), (lab_x + LAB_WIDTH, y))
+        for x in range(lab_x, lab_x + LAB_WIDTH, 40):
+            pygame.draw.line(screen, COLOR_GRID, (x, 0), (x, WINDOW_HEIGHT))
+            
+        pygame.draw.line(screen, COLOR_ACCENT, (lab_x, 0), (lab_x, WINDOW_HEIGHT), 3)
+        
+        # Right Deck: Telemetry
+        hud_x = ARENA_WIDTH + LAB_WIDTH
+        for y in range(0, WINDOW_HEIGHT, 40):
+            pygame.draw.line(screen, COLOR_GRID, (hud_x, y), (WINDOW_WIDTH, y))
+        for x in range(hud_x, WINDOW_WIDTH, 40):
             pygame.draw.line(screen, COLOR_GRID, (x, 0), (x, WINDOW_HEIGHT))
             
         pygame.draw.line(screen, COLOR_ACCENT, (hud_x, 0), (hud_x, WINDOW_HEIGHT), 3)
@@ -308,6 +324,13 @@ def run_simulation():
         alive_count = sum(1 for a in world.agents if a.alive)
         leader = world.get_leader()
         current_score = leader.get_fitness() if leader else 0
+        
+        # Update and Draw Brain Visualizer
+        if leader and leader_idx != -1:
+            leader_inputs = inputs[leader_idx]
+            v = float(batched_snn.gf_v[leader_idx, 0])
+            spiked = bool(flaps[leader_idx])
+            brain_visualizer.update_and_draw(screen, leader_inputs, v, spiked)
         
         mode_text = "REPLAY MODE" if replay_mode else f"GEN: {generation} | SEED: {current_eval_idx+1}/{len(EVAL_SEEDS)}"
         
@@ -335,11 +358,11 @@ def run_simulation():
             surf = font.render(t, True, color)
             screen.blit(surf, (hud_x + 10, y_coords[i]))
             
-        # Fitness Graph
+        # Fitness Graph (Right Deck)
         g_label = font.render("MULTI-SEED FITNESS HISTORY", True, COLOR_TEXT)
-        screen.blit(g_label, (hud_x + 10, 205))
+        screen.blit(g_label, (hud_x + 10, 220))
         
-        graph_rect = pygame.Rect(hud_x + 10, 230, 420, 100)
+        graph_rect = pygame.Rect(hud_x + 10, 245, 320, 100)
         pygame.draw.rect(screen, (0, 0, 0), graph_rect)
         pygame.draw.rect(screen, COLOR_GRID, graph_rect, 1)
         
@@ -356,34 +379,46 @@ def run_simulation():
                 
             pygame.draw.lines(screen, COLOR_ACCENT, False, pts, 2)
             
-        # Leader Brain View
+        # Leader Brain View (Right Deck)
         lb_label = font.render("COMPOUND EYE (8x8 BINARY)", True, COLOR_TEXT)
-        screen.blit(lb_label, (hud_x + 10, 350))
+        screen.blit(lb_label, (hud_x + 10, 370))
         
         if leader:
             heatmap_rgb = get_colored_heatmap(disp_matrix)
             eye_surf = pygame.surfarray.make_surface(heatmap_rgb)
-            # Nearest neighbor scaling preserves the 8x8 grid pixel look
-            eye_surf = pygame.transform.scale(eye_surf, (96, 96))
-            screen.blit(eye_surf, (hud_x + 10, 375))
+            eye_surf = pygame.transform.scale(eye_surf, (128, 128))
+            screen.blit(eye_surf, (hud_x + 10, 395))
             
-        # Giant Fiber Oscilloscope
+        # Hotkeys (Right Deck)
+        keys_label = font.render("HOTKEYS:", True, COLOR_ACCENT)
+        screen.blit(keys_label, (hud_x + 10, 560))
+        hotkeys = [
+            "[P] Pause/Unpause",
+            "[R] Toggle Replay Champion",
+            "[1,2,5,0] Set Sim Speed",
+            "[F11] Toggle Fullscreen"
+        ]
+        for i, hk in enumerate(hotkeys):
+            surf = font.render(hk, True, COLOR_TEXT)
+            screen.blit(surf, (hud_x + 10, 585 + i*25))
+            
+        # Giant Fiber Oscilloscope (Center Deck - Bottom)
         osc_label = font.render("GIANT FIBER VOLTAGE (Vm)", True, COLOR_TEXT)
-        screen.blit(osc_label, (hud_x + 10, 495))
+        screen.blit(osc_label, (lab_x + 10, 680))
         
-        osc_rect = pygame.Rect(hud_x + 10, 520, 420, 65)
+        osc_rect = pygame.Rect(lab_x + 10, 705, 520, 80)
         pygame.draw.rect(screen, (0, 0, 0), osc_rect)
         pygame.draw.rect(screen, COLOR_GRID, osc_rect, 1)
         
         if leader:
-            hist = [float(v[0, 0]) for v in batched_snn.voltage_history[-200:]] if replay_mode else [float(v[leader_idx, 0]) for v in batched_snn.voltage_history[-200:]]
+            hist = [float(v[0, 0]) for v in batched_snn.voltage_history[-260:]] if replay_mode else [float(v[leader_idx, 0]) for v in batched_snn.voltage_history[-260:]]
             min_v, max_v = -80.0, -40.0
             v_range = max_v - min_v
             
             if len(hist) > 1:
                 pts = []
                 for i, v in enumerate(hist):
-                    x = float(osc_rect.x + (i / 200) * osc_rect.width)
+                    x = float(osc_rect.x + (i / max(1, len(hist)-1)) * osc_rect.width)
                     y = float(osc_rect.y + osc_rect.height - ((v - min_v) / v_range) * osc_rect.height)
                     pts.append((x, y))
                     

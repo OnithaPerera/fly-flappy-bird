@@ -1,10 +1,11 @@
 # config.py
 
 # Window dimensions
-WINDOW_WIDTH = 900
-WINDOW_HEIGHT = 600
-ARENA_WIDTH = 450
-HUD_WIDTH = 450
+WINDOW_WIDTH = 1400
+WINDOW_HEIGHT = 800
+ARENA_WIDTH = 500
+LAB_WIDTH = 550
+HUD_WIDTH = 350
 FPS = 60
 
 # UI Colors (Dark Laboratory Palette)
