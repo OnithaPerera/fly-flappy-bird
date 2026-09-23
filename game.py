@@ -22,6 +22,9 @@ class FlyAgent:
         self.frames_survived = 0
         self.ceiling_hits = 0
         self.gap_alignment_reward = 0.0
+        self.oscillation_penalty = 0.0
+        self.action_tape = []
+        self.last_velocity_sign = 0
         
         # Generate lineage color
         self.color = self._generate_color()
@@ -30,7 +33,7 @@ class FlyAgent:
         # Map parameters to RGB colors
         r = int(np.clip((self.brain.beta - 0.5) / 0.48, 0, 1) * 255)
         g = int(np.clip((self.brain.v_thresh + 60) / 25, 0, 1) * 255)
-        b = int(np.clip((self.brain.synaptic_gain - 0.005) / 0.095, 0, 1) * 255)
+        b = 150 # Default for 3rd component
         return (r, g, b)
 
     def flap(self):
@@ -41,6 +44,11 @@ class FlyAgent:
 
     def update(self):
         if not self.alive: return
+        
+        current_sign = 1 if self.velocity > 0 else (-1 if self.velocity < 0 else 0)
+        if self.last_velocity_sign != 0 and current_sign != 0 and current_sign != self.last_velocity_sign:
+            self.oscillation_penalty += 15.0
+        self.last_velocity_sign = current_sign
         
         self.velocity += GRAVITY
         self.y += self.velocity
@@ -60,7 +68,7 @@ class FlyAgent:
             self.ceiling_hits += 1
 
     def get_fitness(self):
-        return self.frames_survived + (self.score * 1500) + self.gap_alignment_reward - (self.ceiling_hits * CEILING_DEATH_PENALTY)
+        return self.frames_survived + (self.score * 1500) + self.gap_alignment_reward - self.oscillation_penalty - (self.ceiling_hits * CEILING_DEATH_PENALTY)
 
     def draw(self, surface, assets, is_leader=False):
         if not self.alive: return
@@ -164,6 +172,7 @@ class SwarmWorld:
             
         for i, agent in enumerate(self.agents):
             if agent.alive:
+                agent.action_tape.append(bool(flaps[i]))
                 if flaps[i]:
                     agent.flap()
                 agent.update()
@@ -174,7 +183,7 @@ class SwarmWorld:
                     if closest_pipe:
                         gap_center = closest_pipe.gap_y
                         dist = abs(agent.y - gap_center)
-                        agent.gap_alignment_reward += max(0.0, 1.0 - dist / 200.0) * 5.0
+                        agent.gap_alignment_reward += max(0.0, 1.0 - dist / 180.0) * 8.0
         
         # Spawn pipes based on distance
         if len(self.pipes) > 0 and (ARENA_WIDTH - self.pipes[-1].x) >= PIPE_SPACING:

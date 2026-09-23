@@ -8,17 +8,72 @@ BASE_URL = "https://raw.githubusercontent.com/samuelcust/flappy-bird-assets/mast
 ASSET_FILES = {
     "background": "background-day.png",
     "pipe": "pipe-green.png",
-    "ground": "base.png",
-    "bird_up": "yellowbird-upflap.png",
-    "bird_mid": "yellowbird-midflap.png",
-    "bird_down": "yellowbird-downflap.png"
+    "ground": "base.png"
 }
 
+def generate_procedural_fly(flap_state):
+    """
+    Generates a retro procedural fruit fly sprite.
+    flap_state: 'up', 'mid', 'down'
+    """
+    width, height = 34, 24
+    surf = pygame.Surface((width, height), pygame.SRCALPHA)
+    
+    # Colors
+    c_outline = (0, 0, 0)
+    c_thorax = (40, 40, 40)
+    c_abd_dark = (160, 90, 20)
+    c_abd_light = (220, 150, 40)
+    c_eye = (220, 20, 40)
+    c_eye_hl = (255, 100, 100)
+    c_wing = (200, 230, 255, 150)
+    c_wing_vein = (150, 180, 220, 180)
+    
+    # Abdomen (striped oval)
+    pygame.draw.ellipse(surf, c_outline, (2, 8, 16, 12))
+    pygame.draw.ellipse(surf, c_abd_dark, (3, 9, 14, 10))
+    for i in range(5, 14, 3):
+        pygame.draw.line(surf, c_abd_light, (i, 10), (i, 17), 2)
+        
+    # Thorax
+    pygame.draw.ellipse(surf, c_outline, (14, 7, 12, 10))
+    pygame.draw.ellipse(surf, c_thorax, (15, 8, 10, 8))
+    
+    # Head and Eye
+    pygame.draw.ellipse(surf, c_outline, (22, 6, 10, 10))
+    pygame.draw.ellipse(surf, c_thorax, (23, 7, 8, 8))
+    
+    # Compound Eye (ruby red)
+    pygame.draw.ellipse(surf, c_outline, (24, 5, 8, 8))
+    pygame.draw.ellipse(surf, c_eye, (25, 6, 6, 6))
+    pygame.draw.rect(surf, c_eye_hl, (28, 7, 2, 2)) # highlight
+    
+    # Legs (simple lines)
+    pygame.draw.line(surf, c_outline, (16, 16), (14, 20), 1)
+    pygame.draw.line(surf, c_outline, (20, 16), (20, 21), 1)
+    pygame.draw.line(surf, c_outline, (24, 14), (26, 19), 1)
+    
+    # Wings based on flap state
+    if flap_state == "up":
+        wing_rect = (8, 0, 16, 10)
+    elif flap_state == "down":
+        wing_rect = (8, 14, 16, 10)
+    else: # mid
+        wing_rect = (6, 5, 18, 6)
+        
+    pygame.draw.ellipse(surf, c_outline, wing_rect)
+    pygame.draw.ellipse(surf, c_wing, (wing_rect[0]+1, wing_rect[1]+1, wing_rect[2]-2, wing_rect[3]-2))
+    
+    # Vein
+    pygame.draw.line(surf, c_wing_vein, 
+                     (wing_rect[0] + 4, wing_rect[1] + wing_rect[3]//2), 
+                     (wing_rect[0] + wing_rect[2] - 4, wing_rect[1] + wing_rect[3]//2), 1)
+                     
+    # Scale up (similar to the 1.5x in original code)
+    surf = pygame.transform.scale(surf, (int(width * 1.5), int(height * 1.5)))
+    return surf
+
 def load_or_fetch_assets():
-    """
-    Downloads authentic Flappy Bird assets if missing.
-    Returns a dictionary of loaded Pygame surfaces, or procedural fallbacks on failure.
-    """
     if not os.path.exists(ASSETS_DIR):
         os.makedirs(ASSETS_DIR)
         
@@ -40,28 +95,16 @@ def load_or_fetch_assets():
     if not fallback_mode:
         try:
             assets["background"] = pygame.image.load(os.path.join(ASSETS_DIR, ASSET_FILES["background"])).convert()
-            # Scale background to fill arena
             assets["background"] = pygame.transform.scale(assets["background"], (ARENA_WIDTH, WINDOW_HEIGHT))
             
             assets["pipe"] = pygame.image.load(os.path.join(ASSETS_DIR, ASSET_FILES["pipe"])).convert_alpha()
-            # Scale pipe appropriately
             pipe_rect = assets["pipe"].get_rect()
-            pipe_width = int(ARENA_WIDTH * 0.15) # 15% of screen width
+            pipe_width = int(ARENA_WIDTH * 0.15)
             pipe_height = int(pipe_rect.height * (pipe_width / pipe_rect.width))
             assets["pipe"] = pygame.transform.scale(assets["pipe"], (pipe_width, pipe_height))
             
             assets["ground"] = pygame.image.load(os.path.join(ASSETS_DIR, ASSET_FILES["ground"])).convert()
-            # Scale ground
             assets["ground"] = pygame.transform.scale(assets["ground"], (ARENA_WIDTH * 2, int(WINDOW_HEIGHT * 0.2)))
-            
-            assets["bird_up"] = pygame.image.load(os.path.join(ASSETS_DIR, ASSET_FILES["bird_up"])).convert_alpha()
-            assets["bird_mid"] = pygame.image.load(os.path.join(ASSETS_DIR, ASSET_FILES["bird_mid"])).convert_alpha()
-            assets["bird_down"] = pygame.image.load(os.path.join(ASSETS_DIR, ASSET_FILES["bird_down"])).convert_alpha()
-            
-            # Scale birds up a bit (e.g., 1.5x)
-            for b_key in ["bird_up", "bird_mid", "bird_down"]:
-                w, h = assets[b_key].get_width(), assets[b_key].get_height()
-                assets[b_key] = pygame.transform.scale(assets[b_key], (int(w * 1.5), int(h * 1.5)))
                 
         except Exception as e:
             print(f"Error loading images: {e}. Enabling fallback textures.")
@@ -69,37 +112,27 @@ def load_or_fetch_assets():
             
     if fallback_mode:
         print("[Assets Loader] Using procedural fallback assets.")
-        # Background
         assets["background"] = pygame.Surface((ARENA_WIDTH, WINDOW_HEIGHT))
-        assets["background"].fill((112, 197, 206)) # Flappy blue sky
+        assets["background"].fill((112, 197, 206))
         
-        # Pipe
         pipe_w = int(ARENA_WIDTH * 0.15)
         pipe_h = WINDOW_HEIGHT
         pipe_surf = pygame.Surface((pipe_w, pipe_h), pygame.SRCALPHA)
-        pygame.draw.rect(pipe_surf, (116, 191, 46), (0, 0, pipe_w, pipe_h)) # Body
-        pygame.draw.rect(pipe_surf, (84, 155, 33), (0, 0, pipe_w, pipe_h), 2) # Outline
-        # Bevel cap
+        pygame.draw.rect(pipe_surf, (116, 191, 46), (0, 0, pipe_w, pipe_h))
+        pygame.draw.rect(pipe_surf, (84, 155, 33), (0, 0, pipe_w, pipe_h), 2)
         pygame.draw.rect(pipe_surf, (116, 191, 46), (-2, 0, pipe_w+4, 30))
         pygame.draw.rect(pipe_surf, (84, 155, 33), (-2, 0, pipe_w+4, 30), 2)
         assets["pipe"] = pipe_surf
         
-        # Ground
         ground_h = int(WINDOW_HEIGHT * 0.2)
         ground_surf = pygame.Surface((ARENA_WIDTH * 2, ground_h))
         ground_surf.fill((221, 216, 148))
         pygame.draw.rect(ground_surf, (115, 190, 46), (0, 0, ARENA_WIDTH * 2, 10))
         assets["ground"] = ground_surf
-        
-        # Birds
-        for b_key in ["bird_up", "bird_mid", "bird_down"]:
-            bird_surf = pygame.Surface((40, 30), pygame.SRCALPHA)
-            pygame.draw.ellipse(bird_surf, (244, 215, 60), (0, 0, 40, 30))
-            pygame.draw.ellipse(bird_surf, (0, 0, 0), (0, 0, 40, 30), 2)
-            pygame.draw.circle(bird_surf, (255, 255, 255), (30, 10), 6)
-            pygame.draw.circle(bird_surf, (0, 0, 0), (32, 10), 2)
-            # Orange beak
-            pygame.draw.rect(bird_surf, (241, 104, 35), (30, 15, 15, 8))
-            assets[b_key] = bird_surf
+
+    # Always procedurally generate the fruit fly
+    assets["bird_up"] = generate_procedural_fly("up")
+    assets["bird_mid"] = generate_procedural_fly("mid")
+    assets["bird_down"] = generate_procedural_fly("down")
             
     return assets

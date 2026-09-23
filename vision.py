@@ -20,45 +20,37 @@ def preprocess_frame(surface):
 
 from config import EYE_RES, LPI_INHIBITION_WEIGHT
 
-def compute_temporal_looming(curr_frame, prev_frame_1, prev_frame_2, spatial_weights=None):
+def compute_stabilized_looming(curr_frame, prev_frame, bird_vel):
     """
-    Calculates 3-frame temporal expansion tensor.
-    Splits field into Ventral (excitatory) and Dorsal (inhibitory) zones.
+    Calculates stabilized expansion tensor.
+    Compensates for vertical egomotion (self-bobbing).
+    Returns a normalized 1024-element 1D vector.
     """
-    if prev_frame_1 is None or prev_frame_2 is None:
-        return 0.0, np.zeros((EYE_RES, EYE_RES), dtype=np.float32)
+    if prev_frame is None:
+        return np.zeros(EYE_RES * EYE_RES, dtype=np.float32)
         
-    D1 = cv2.absdiff(curr_frame, prev_frame_1).astype(np.float32)
-    D2 = cv2.absdiff(prev_frame_1, prev_frame_2).astype(np.float32)
+    # Vertical egomotion shift
+    shift_y = int(round(-bird_vel * 0.8))
+    
+    # We can shift prev_frame using np.roll
+    shifted_prev = np.roll(prev_frame, shift_y, axis=0)
+    
+    # Handle wrap-around from np.roll by zeroing out the rolled-in edges
+    if shift_y > 0:
+        shifted_prev[:shift_y, :] = 0
+    elif shift_y < 0:
+        shifted_prev[shift_y:, :] = 0
+        
+    diff = cv2.absdiff(curr_frame, shifted_prev).astype(np.float32)
     
     # Cancel horizontal parallax scrolling by subtracting median row displacement
-    D1 = np.maximum(0, D1 - np.median(D1, axis=1, keepdims=True))
-    D2 = np.maximum(0, D2 - np.median(D2, axis=1, keepdims=True))
+    diff = np.maximum(0, diff - np.median(diff, axis=1, keepdims=True))
     
-    # Optical Looming Acceleration
-    looming = D1 + np.maximum(0.0, D1 - D2)
+    # Normalize to [0, 1] range approximately (max diff is 255)
+    diff = diff / 255.0
     
-    if spatial_weights is None:
-        spatial_weights = np.ones((EYE_RES, EYE_RES), dtype=np.float32)
-        spatial_weights[0:13, :] = 0.2
-        spatial_weights[13:, :] = 2.0
-    
-    if isinstance(spatial_weights, list):
-        spatial_weights = np.array(spatial_weights, dtype=np.float32)
-        
-    masked_looming = looming * spatial_weights
-    
-    # Ventral (rows 13 to 31, excitatory)
-    # Dorsal (rows 0 to 12, inhibitory)
-    ventral = masked_looming[13:, :]
-    dorsal = masked_looming[:13, :]
-    
-    i_excitatory = np.sum(ventral)
-    i_inhibitory = np.sum(dorsal)
-    
-    total_drive = i_excitatory - (i_inhibitory * LPI_INHIBITION_WEIGHT)
-    
-    return total_drive, masked_looming
+    return diff.flatten()
+
 
 def get_colored_heatmap(matrix_32x32):
     """

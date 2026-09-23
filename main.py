@@ -13,17 +13,17 @@ run_preflight_checks()
 from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, FPS,
                     COLOR_PANEL, COLOR_PHOSPHOR, COLOR_GRID, COLOR_LEADER, COLOR_TEXT, COLOR_ACCENT,
                     GA_POPULATION_SIZE, GA_ELITE_COUNT, INITIAL_MUT_RATE, MIN_MUT_RATE, INITIAL_MUT_SCALE, MIN_MUT_SCALE, DECAY_RATE,
-                    EYE_RES)
+                    EYE_RES, EVAL_SEEDS)
 from game import SwarmWorld
-from vision import preprocess_frame, compute_temporal_looming, get_colored_heatmap
-from connectome_lif import LoomingCircuitController
+from vision import preprocess_frame, compute_stabilized_looming, get_colored_heatmap
+from connectome_lif import RecurrentConnectomeLIF
 from assets_loader import load_or_fetch_assets
 import sound_fx
 
 def initialize_population(size):
     pop = []
     for _ in range(size):
-        brain = LoomingCircuitController()
+        brain = RecurrentConnectomeLIF()
         # Initial random mutation
         brain.mutate(1.0, 0.5)
         pop.append(brain)
@@ -47,20 +47,28 @@ def run_simulation():
     population = initialize_population(GA_POPULATION_SIZE)
     world = SwarmWorld(population, assets)
     
-    current_seed = (0 // 5) * 42
+    current_eval_idx = 0
+    current_seed = EVAL_SEEDS[current_eval_idx]
     world.reset(current_seed)
     
-    prev_frames = [(None, None)] * GA_POPULATION_SIZE
+    prev_frames = [None] * GA_POPULATION_SIZE
     
     generation = 1
     max_fitness_history = []
     all_time_record = 0
     all_time_record_seed = current_seed
+    all_time_action_tape = []
     best_overall_genome = None
+    
+    agent_total_fitness = [0] * GA_POPULATION_SIZE
+    best_run_tapes = [None] * GA_POPULATION_SIZE
+    best_run_seeds = [None] * GA_POPULATION_SIZE
+    best_run_scores = [-1] * GA_POPULATION_SIZE
     
     running = True
     paused = False
     replay_mode = False
+    replay_frame_idx = 0
     
     # Speed multiplier (1, 2, 5, 15)
     speed_multiplier = 1
@@ -86,10 +94,11 @@ def run_simulation():
                     if replay_mode:
                         if best_overall_genome is not None:
                             print(f"Entering Replay Mode for seed {all_time_record_seed}")
-                            replay_brain = LoomingCircuitController(genome=best_overall_genome)
+                            replay_brain = RecurrentConnectomeLIF(genome=best_overall_genome)
                             world = SwarmWorld([replay_brain], assets)
                             world.reset(all_time_record_seed)
-                            prev_frames = [(None, None)]
+                            prev_frames = [None]
+                            replay_frame_idx = 0
                             paused = False
                             speed_multiplier = 1
                         else:
@@ -99,7 +108,7 @@ def run_simulation():
                         print("Exiting Replay Mode. Resuming evolution...")
                         world = SwarmWorld(population, assets)
                         world.reset(current_seed)
-                        prev_frames = [(None, None)] * GA_POPULATION_SIZE
+                        prev_frames = [None] * GA_POPULATION_SIZE
                         paused = False
                 elif event.key == pygame.K_s:
                     if best_overall_genome is not None:
@@ -112,52 +121,76 @@ def run_simulation():
                     if replay_mode:
                         # In replay mode, just loop the replay
                         world.reset(all_time_record_seed)
-                        prev_frames = [(None, None)]
+                        prev_frames = [None]
+                        replay_frame_idx = 0
                         break
                         
                     # Evolution step
-                    agents = world.agents
+                    for i, a in enumerate(world.agents):
+                        fit = a.get_fitness()
+                        agent_total_fitness[i] += fit
+                        if fit > best_run_scores[i]:
+                            best_run_scores[i] = fit
+                            best_run_tapes[i] = a.action_tape.copy()
+                            best_run_seeds[i] = current_seed
+                            
+                    current_eval_idx += 1
                     
-                    # Update records
-                    best_agent = max(agents, key=lambda a: a.get_fitness())
-                    gen_max_fitness = best_agent.get_fitness()
-                    max_fitness_history.append(gen_max_fitness)
-                    
-                    if gen_max_fitness > all_time_record:
-                        all_time_record = gen_max_fitness
-                        all_time_record_seed = current_seed
-                        best_overall_genome = best_agent.brain.get_genome()
-                        print(f"New All-Time Record: {all_time_record} (Seed: {all_time_record_seed})")
+                    if current_eval_idx < len(EVAL_SEEDS):
+                        current_seed = EVAL_SEEDS[current_eval_idx]
+                        world = SwarmWorld(population, assets)
+                        world.reset(current_seed)
+                        prev_frames = [None] * GA_POPULATION_SIZE
+                        break
+                    else:
+                        # End of generation
+                        avg_fitnesses = [f / len(EVAL_SEEDS) for f in agent_total_fitness]
+                        best_idx = int(np.argmax(avg_fitnesses))
+                        gen_max_fitness = avg_fitnesses[best_idx]
+                        max_fitness_history.append(gen_max_fitness)
                         
-                    print(f"Gen {generation} | Max Fit: {gen_max_fitness} | Avg Fit: {np.mean([a.get_fitness() for a in agents]):.1f}")
-                    
-                    # Sort agents by fitness descending
-                    agents.sort(key=lambda a: a.get_fitness(), reverse=True)
-                    
-                    next_population = []
-                    # Elitism
-                    for i in range(GA_ELITE_COUNT):
-                        next_population.append(agents[i].brain.clone())
+                        if gen_max_fitness > all_time_record:
+                            all_time_record = gen_max_fitness
+                            all_time_record_seed = best_run_seeds[best_idx]
+                            all_time_action_tape = best_run_tapes[best_idx]
+                            best_overall_genome = population[best_idx].get_genome()
+                            print(f"New All-Time Record: {all_time_record:.1f} (Seed: {all_time_record_seed})")
+                            
+                        print(f"Gen {generation} | Max Fit: {gen_max_fitness:.1f} | Avg Fit: {np.mean(avg_fitnesses):.1f}")
                         
-                    mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
-                    mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
+                        # Sort indices by fitness descending
+                        sorted_indices = np.argsort(avg_fitnesses)[::-1]
                         
-                    # Tournament selection and mutation
-                    while len(next_population) < GA_POPULATION_SIZE:
-                        # Tournament size 3
-                        tourney = random.sample(agents, 3)
-                        winner = max(tourney, key=lambda a: a.get_fitness())
-                        child = winner.brain.clone()
-                        child.mutate(mut_rate, mut_scale)
-                        next_population.append(child)
+                        next_population = []
+                        # Elitism
+                        for i in range(GA_ELITE_COUNT):
+                            next_population.append(population[sorted_indices[i]].clone())
+                            
+                        mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
+                        mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
+                            
+                        # Tournament selection
+                        while len(next_population) < GA_POPULATION_SIZE:
+                            tourney_indices = random.sample(range(GA_POPULATION_SIZE), 3)
+                            winner_idx = max(tourney_indices, key=lambda idx: avg_fitnesses[idx])
+                            child = population[winner_idx].clone()
+                            child.mutate(mut_rate, mut_scale)
+                            next_population.append(child)
+                            
+                        population = next_population
+                        generation += 1
+                        current_eval_idx = 0
+                        current_seed = EVAL_SEEDS[current_eval_idx]
                         
-                    population = next_population
-                    world = SwarmWorld(population, assets)
-                    current_seed = (generation // 5) * 42
-                    world.reset(current_seed)
-                    prev_frames = [(None, None)] * GA_POPULATION_SIZE
-                    generation += 1
-                    break # Break out of substeps to render the new generation
+                        agent_total_fitness = [0] * GA_POPULATION_SIZE
+                        best_run_tapes = [None] * GA_POPULATION_SIZE
+                        best_run_seeds = [None] * GA_POPULATION_SIZE
+                        best_run_scores = [-1] * GA_POPULATION_SIZE
+                        
+                        world = SwarmWorld(population, assets)
+                        world.reset(current_seed)
+                        prev_frames = [None] * GA_POPULATION_SIZE
+                        break # Break out of substeps to render the new generation
                 
                 # Physics and vision update
                 offscreen_surf = world.render()
@@ -178,20 +211,29 @@ def run_simulation():
                         flaps.append(False)
                         continue
                         
-                    prev1, prev2 = prev_frames[i]
-                    drive, masked_diff = compute_temporal_looming(curr_frame, prev1, prev2, agent.brain.spatial_weights)
-                    prev_frames[i] = (curr_frame, prev1)
+                    drive = compute_stabilized_looming(curr_frame, prev_frames[i], agent.velocity)
+                    prev_frames[i] = curr_frame
                     
                     if i == leader_idx:
-                        masked_diff_leader = masked_diff
+                        masked_diff_leader = drive.reshape(32, 32)
                         
                     flap = agent.brain.step(drive, agent.velocity)
+                    
+                    if replay_mode:
+                        if replay_frame_idx < len(all_time_action_tape):
+                            flap = all_time_action_tape[replay_frame_idx]
+                        else:
+                            flap = False
+                            
                     flaps.append(flap)
                     
                     # Optional: play click for leader
                     if flap and i == leader_idx:
                         sound_fx.play_spike_click()
-                        
+                
+                if replay_mode and not world.all_dead:
+                    replay_frame_idx += 1
+                    
                 world.step(flaps)
                 
         # Rendering
@@ -215,7 +257,7 @@ def run_simulation():
         leader = world.get_leader()
         current_score = leader.get_fitness() if leader else 0
         
-        mode_text = "REPLAY MODE" if replay_mode else f"GENERATION: {generation}"
+        mode_text = "REPLAY MODE" if replay_mode else f"GEN: {generation} | SEED: {current_eval_idx+1}/{len(EVAL_SEEDS)}"
         
         mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
         mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
@@ -239,7 +281,7 @@ def run_simulation():
         pygame.draw.rect(screen, (0, 0, 0), graph_rect)
         pygame.draw.rect(screen, COLOR_GRID, graph_rect, 1)
         
-        g_label = font.render("FITNESS HISTORY", True, COLOR_TEXT)
+        g_label = font.render("MULTI-SEED FITNESS HISTORY", True, COLOR_TEXT)
         screen.blit(g_label, (hud_x + 10, 130))
         
         if len(max_fitness_history) > 1 and not replay_mode:
@@ -256,7 +298,7 @@ def run_simulation():
             pygame.draw.lines(screen, COLOR_ACCENT, False, pts, 2)
             
         # Leader Brain View
-        lb_label = font.render("LEADER COMPOUND EYE (LPLC2)", True, COLOR_TEXT)
+        lb_label = font.render("STABILIZED COMPOUND EYE", True, COLOR_TEXT)
         screen.blit(lb_label, (hud_x + 10, 270))
         
         if leader:

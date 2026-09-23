@@ -1,105 +1,110 @@
 import numpy as np
 from config import (V_REST, V_RESET, V_THRESH, BETA, REFRACTORY_FRAMES, SYNAPTIC_GAIN, EYE_RES,
                     BOUND_BETA, BOUND_THRESH, BOUND_GAIN, BOUND_WEIGHT, HALTERE_DAMPING,
-                    ADAPTIVE_THRESH_INCREMENT, ADAPTIVE_THRESH_DECAY)
+                    ADAPTIVE_THRESH_INCREMENT, ADAPTIVE_THRESH_DECAY,
+                    INPUT_NEURONS, HIDDEN_NEURONS, OUTPUT_NEURONS)
 
-class LoomingCircuitController:
+class RecurrentConnectomeLIF:
     def __init__(self, genome=None):
-        self.v = V_REST
+        self.hidden_v = np.full(HIDDEN_NEURONS, V_REST, dtype=np.float32)
+        self.gf_v = V_REST
         self.refractory_timer = 0
         self.adaptive_thresh = 0.0
-        self.history_frames = 0
         self.voltage_history = []
-        self.genome_enabled = False
         
-        # Default baseline parameters
+        # SNN Hyperparams
         self.beta = BETA
         self.v_thresh = V_THRESH
-        self.synaptic_gain = SYNAPTIC_GAIN
         
-        # Spatial weights: 32x32
-        self.spatial_weights = np.ones((EYE_RES, EYE_RES), dtype=np.float32)
-        self.spatial_weights[0:EYE_RES//2, :] = 0.2
-        self.spatial_weights[EYE_RES//2:, :] = 2.0
-        
+        # Weights
         if genome is not None:
             self.set_genome(genome)
+        else:
+            # Small random weights
+            self.W_in = np.random.normal(0, 0.01, (HIDDEN_NEURONS, INPUT_NEURONS)).astype(np.float32)
+            self.W_rec = np.random.normal(0, 0.01, (HIDDEN_NEURONS, HIDDEN_NEURONS)).astype(np.float32)
+            self.W_out = np.random.normal(0, 0.01, (OUTPUT_NEURONS, HIDDEN_NEURONS)).astype(np.float32)
             
     def get_genome(self):
-        """
-        Serializes the network into a 1D genome vector.
-        [beta, v_thresh, synaptic_gain, ...spatial_weights_flat...]
-        """
-        flat_weights = self.spatial_weights.flatten()
-        genome = np.concatenate(([self.beta, self.v_thresh, self.synaptic_gain], flat_weights))
+        genome = np.concatenate((
+            [self.beta, self.v_thresh],
+            self.W_in.flatten(),
+            self.W_rec.flatten(),
+            self.W_out.flatten()
+        ))
         return genome
         
     def set_genome(self, genome):
-        """
-        Deserializes a 1D genome vector into network parameters.
-        """
-        self.genome_enabled = True
         self.beta = genome[0]
         self.v_thresh = genome[1]
-        self.synaptic_gain = genome[2]
-        self.spatial_weights = genome[3:].reshape((EYE_RES, EYE_RES))
-
+        
+        ptr = 2
+        
+        size_in = HIDDEN_NEURONS * INPUT_NEURONS
+        self.W_in = genome[ptr:ptr+size_in].reshape((HIDDEN_NEURONS, INPUT_NEURONS))
+        ptr += size_in
+        
+        size_rec = HIDDEN_NEURONS * HIDDEN_NEURONS
+        self.W_rec = genome[ptr:ptr+size_rec].reshape((HIDDEN_NEURONS, HIDDEN_NEURONS))
+        ptr += size_rec
+        
+        size_out = OUTPUT_NEURONS * HIDDEN_NEURONS
+        self.W_out = genome[ptr:ptr+size_out].reshape((OUTPUT_NEURONS, HIDDEN_NEURONS))
+        
     def clone(self):
-        """Returns a new instance with an identical genome."""
-        return LoomingCircuitController(genome=self.get_genome())
-
+        return RecurrentConnectomeLIF(genome=self.get_genome())
+        
     def mutate(self, rate, scale):
-        """Mutates the genome in place."""
         genome = self.get_genome()
-        for i in range(len(genome)):
-            if np.random.rand() < rate:
-                genome[i] += np.random.normal(0, scale)
-                
+        
+        mask = np.random.rand(len(genome)) < rate
+        mutations = np.random.normal(0, scale, len(genome))
+        genome += mask * mutations
+        
         # Enforce bounds
         genome[0] = np.clip(genome[0], BOUND_BETA[0], BOUND_BETA[1])
         genome[1] = np.clip(genome[1], BOUND_THRESH[0], BOUND_THRESH[1])
-        genome[2] = np.clip(genome[2], BOUND_GAIN[0], BOUND_GAIN[1])
-        genome[3:] = np.clip(genome[3:], BOUND_WEIGHT[0], BOUND_WEIGHT[1])
         
         self.set_genome(genome)
-
-    def crossover(self, partner):
-        """Returns a new child produced by uniform crossover."""
-        p1 = self.get_genome()
-        p2 = partner.get_genome()
-        mask = np.random.rand(len(p1)) > 0.5
-        child_genome = np.where(mask, p1, p2)
-        return LoomingCircuitController(genome=child_genome)
         
-    def load_flywire_weights(self, token):
-        print(f"FlyWire Connectome hook called with token {token[:5]}... (stub).")
-        pass
-        
-    def step(self, total_drive, vertical_velocity):
-        """
-        Leaky Integrate-and-Fire simulation step with Haltere proprioception and SFA.
-        """
+    def step(self, visual_input, vertical_velocity):
         if self.refractory_timer > 0:
             self.refractory_timer -= 1
-            self.v = V_RESET
+            self.gf_v = V_RESET
             self.adaptive_thresh *= ADAPTIVE_THRESH_DECAY
-            self.voltage_history.append(self.v)
+            self.voltage_history.append(self.gf_v)
             return False
             
+        # Hidden layer
+        hidden_spikes = (self.hidden_v >= self.v_thresh).astype(np.float32)
+        
+        # Reset spiked hidden neurons
+        self.hidden_v[hidden_spikes > 0] = V_RESET
+        
+        # Compute input current to hidden
+        I_hidden = self.W_in @ visual_input + self.W_rec @ hidden_spikes
+        
         # Haltere Proprioceptive Damping
         if vertical_velocity < 0:
-            total_drive *= HALTERE_DAMPING
+            I_hidden *= HALTERE_DAMPING
             
+        # Update hidden membrane potentials
+        self.hidden_v = (self.hidden_v - V_REST) * self.beta + V_REST + I_hidden
+        
+        # Compute input current to GF
+        # Assuming OUTPUT_NEURONS is 1
+        I_gf = float(self.W_out @ hidden_spikes)
+        
         effective_thresh = self.v_thresh + self.adaptive_thresh
-            
-        # LIF Equation
-        self.v = (self.v - V_REST) * self.beta + V_REST + (total_drive * self.synaptic_gain)
+        
+        # Update GF membrane potential
+        self.gf_v = (self.gf_v - V_REST) * self.beta + V_REST + I_gf
         self.adaptive_thresh *= ADAPTIVE_THRESH_DECAY
         
-        self.voltage_history.append(self.v)
+        self.voltage_history.append(self.gf_v)
         
-        if self.v >= effective_thresh:
-            self.v = V_RESET
+        if self.gf_v >= effective_thresh:
+            self.gf_v = V_RESET
             self.adaptive_thresh += ADAPTIVE_THRESH_INCREMENT
             self.refractory_timer = REFRACTORY_FRAMES
             return True
