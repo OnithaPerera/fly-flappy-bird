@@ -208,13 +208,15 @@ def run_simulation():
                                 mutations = np.random.normal(0, mut_scale, TOTAL_GENOME_SIZE)
                                 child += mask * mutations
                                 
-                                child[0:8] = np.clip(child[0:8], BOUND_DORSAL_W[0], BOUND_DORSAL_W[1])
-                                child[8:16] = np.clip(child[8:16], BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1])
-                                child[16] = np.clip(child[16], BOUND_TONIC[0], BOUND_TONIC[1])
-                                child[17] = np.clip(child[17], BOUND_BETA[0], BOUND_BETA[1])
-                                child[18] = np.clip(child[18], BOUND_THRESH[0], BOUND_THRESH[1])
-                                child[19] = np.clip(child[19], BOUND_HALTERE[0], BOUND_HALTERE[1])
-                                child[20] = np.clip(child[20], BOUND_GROUND_GAIN[0], BOUND_GROUND_GAIN[1])
+                                child[0:32] = np.clip(child[0:32], BOUND_DORSAL_W[0], BOUND_DORSAL_W[1])
+                                child[32:64] = np.clip(child[32:64], BOUND_VENTRAL_W[0], BOUND_VENTRAL_W[1])
+                                child[64] = np.clip(child[64], BOUND_ALT[0], BOUND_ALT[1])
+                                child[65] = np.clip(child[65], BOUND_VEL[0], BOUND_VEL[1])
+                                
+                                child[66] = np.clip(child[66], BOUND_TONIC[0], BOUND_TONIC[1])
+                                child[67] = np.clip(child[67], BOUND_BETA[0], BOUND_BETA[1])
+                                child[68] = np.clip(child[68], BOUND_THRESH[0], BOUND_THRESH[1])
+                                child[69] = np.clip(child[69], BOUND_HALTERE[0], BOUND_HALTERE[1])
                                 new_genomes.append(child)
                                 
                             # Add random agents
