@@ -3,8 +3,7 @@ import random
 import math
 import numpy as np
 from config import (ARENA_WIDTH, WINDOW_HEIGHT, GRAVITY, FLAP_STRENGTH, 
-                    PIPE_SPEED, PIPE_SPAWN_FRAMES, PIPE_GAP, 
-                    COLOR_WING, COLOR_LEADER, COLOR_BG, COLOR_FLY_EYE)
+                    PIPE_SPEED, PIPE_SPACING, PIPE_GAP)
 
 class FlyAgent:
     def __init__(self, brain):
@@ -61,44 +60,53 @@ class FlyAgent:
     def get_fitness(self):
         return self.frames_survived + (self.score * 1000) - (self.ceiling_hits * 100)
 
-    def draw(self, surface, is_leader=False):
+    def draw(self, surface, assets, is_leader=False):
         if not self.alive: return
         
-        alpha = 150 if not is_leader else 255
-        temp_surf = pygame.Surface((40, 40), pygame.SRCALPHA)
-        cx, cy = 20, 20
+        alpha = 89 if not is_leader else 255  # ~35% alpha = 89
         
-        if is_leader:
-            pygame.draw.circle(temp_surf, (*COLOR_LEADER, 100), (cx, cy), 18)
-            pygame.draw.circle(temp_surf, (*COLOR_LEADER, 255), (cx, cy), 18, 1)
-
         angle = -math.degrees(math.atan2(self.velocity, 10))
         angle = max(min(angle, 30), -45)
         
-        pygame.draw.ellipse(temp_surf, (*self.color, alpha), (cx - 10, cy - 6, 20, 12))
-        pygame.draw.circle(temp_surf, (*self.color, alpha), (cx + 8, cy), 6)
-        pygame.draw.circle(temp_surf, (*COLOR_FLY_EYE, alpha), (cx + 8, cy - 3), 3)
-        pygame.draw.circle(temp_surf, (*COLOR_FLY_EYE, alpha), (cx + 8, cy + 3), 3)
-        
         if self.is_flapping:
-            pygame.draw.ellipse(temp_surf, (*COLOR_WING[:3], alpha), (cx - 5, cy + 2, 12, 8))
+            bird_surf = assets["bird_up"].copy()
+        elif self.velocity > 0:
+            bird_surf = assets["bird_down"].copy()
         else:
-            pygame.draw.ellipse(temp_surf, (*COLOR_WING[:3], alpha), (cx - 8, cy - 12, 12, 8))
+            bird_surf = assets["bird_mid"].copy()
             
-        surface.blit(temp_surf, (int(self.x) - 20, int(self.y) - 20))
-
+        # Tint the bird based on genome
+        tint = pygame.Surface(bird_surf.get_size(), flags=pygame.SRCALPHA)
+        tint.fill((*self.color, 100))
+        bird_surf.blit(tint, (0,0), special_flags=pygame.BLEND_RGBA_MULT)
+        
+        bird_surf.set_alpha(alpha)
+        
+        rotated_bird = pygame.transform.rotate(bird_surf, angle)
+        rect = rotated_bird.get_rect(center=(int(self.x), int(self.y)))
+        
+        surface.blit(rotated_bird, rect)
+        
+        if is_leader:
+            pygame.draw.circle(surface, (255, 179, 0, 150), (int(self.x), int(self.y)), 30, 2)
 
 class PipePair:
-    def __init__(self):
-        self.x = ARENA_WIDTH
-        self.width = 50
-        min_y = 150
-        max_y = WINDOW_HEIGHT - 150
+    def __init__(self, x_pos, pipe_surf, ground_h):
+        self.x = x_pos
+        self.pipe_surf = pipe_surf
+        self.width = pipe_surf.get_width()
+        
+        min_y = 100
+        max_y = WINDOW_HEIGHT - ground_h - 100
         self.gap_y = random.randint(min_y, max_y)
         
-        self.top_rect = pygame.Rect(self.x, 0, self.width, self.gap_y - PIPE_GAP // 2)
+        # Bottom pipe
         bottom_y = self.gap_y + PIPE_GAP // 2
         self.bottom_rect = pygame.Rect(self.x, bottom_y, self.width, WINDOW_HEIGHT - bottom_y)
+        
+        # Top pipe
+        self.top_rect = pygame.Rect(self.x, 0, self.width, self.gap_y - PIPE_GAP // 2)
+        
         self.passed = False
 
     def update(self):
@@ -107,22 +115,38 @@ class PipePair:
         self.bottom_rect.x = self.x
 
     def draw(self, surface):
-        pygame.draw.rect(surface, (0, 200, 100), self.top_rect)
-        pygame.draw.rect(surface, (0, 200, 100), self.bottom_rect)
-
+        # Draw bottom pipe
+        surface.blit(self.pipe_surf, (self.top_rect.x, self.bottom_rect.y))
+        
+        # Draw top pipe (flipped vertically)
+        flipped_pipe = pygame.transform.flip(self.pipe_surf, False, True)
+        
+        # We need to slice the bottom part of the flipped pipe so it ends at top_rect.bottom
+        pipe_h = flipped_pipe.get_height()
+        blit_y = self.top_rect.bottom - pipe_h
+        surface.blit(flipped_pipe, (self.top_rect.x, blit_y))
 
 class SwarmWorld:
-    def __init__(self, population):
+    def __init__(self, population, assets):
         self.surface = pygame.Surface((ARENA_WIDTH, WINDOW_HEIGHT))
         self.population = population
-        self.reset()
+        self.assets = assets
+        self.ground_h = self.assets["ground"].get_height()
+        self.ground_x = 0
+        self.reset(seed=42)
 
-    def reset(self):
+    def reset(self, seed):
+        random.seed(seed)
         self.agents = [FlyAgent(brain) for brain in self.population]
         self.pipes = []
         self.frames = 0
         self.all_dead = False
         
+        # Spawn first pipe
+        self.pipes.append(PipePair(ARENA_WIDTH + 200, self.assets["pipe"], self.ground_h))
+        # Reset python random seed back to normal time-based behavior if we want,
+        # but leaving it deterministic for the generation is good too.
+
     def get_leader(self):
         alive_agents = [a for a in self.agents if a.alive]
         if not alive_agents:
@@ -142,8 +166,9 @@ class SwarmWorld:
                     agent.flap()
                 agent.update()
         
-        if self.frames % PIPE_SPAWN_FRAMES == 0:
-            self.pipes.append(PipePair())
+        # Spawn pipes based on distance
+        if len(self.pipes) > 0 and (ARENA_WIDTH - self.pipes[-1].x) >= PIPE_SPACING:
+            self.pipes.append(PipePair(ARENA_WIDTH, self.assets["pipe"], self.ground_h))
             
         for pipe in self.pipes:
             pipe.update()
@@ -158,11 +183,14 @@ class SwarmWorld:
                 
         self.pipes = [p for p in self.pipes if p.x + p.width > 0]
         
+        # Update ground
+        self.ground_x = (self.ground_x - PIPE_SPEED) % -ARENA_WIDTH
+        
         alive_count = 0
         for agent in self.agents:
             if not agent.alive: continue
             
-            if agent.y >= WINDOW_HEIGHT - 10:
+            if agent.y >= WINDOW_HEIGHT - self.ground_h - 10:
                 agent.alive = False
                 agent.death_frame = self.frames
                 
@@ -180,14 +208,19 @@ class SwarmWorld:
         self.frames += 1
 
     def render(self):
-        self.surface.fill(COLOR_BG)
+        # Draw background
+        self.surface.blit(self.assets["background"], (0, 0))
         
         for pipe in self.pipes:
             pipe.draw(self.surface)
             
+        # Draw ground
+        self.surface.blit(self.assets["ground"], (self.ground_x, WINDOW_HEIGHT - self.ground_h))
+        self.surface.blit(self.assets["ground"], (self.ground_x + ARENA_WIDTH, WINDOW_HEIGHT - self.ground_h))
+            
         leader = self.get_leader()
         for agent in self.agents:
             if agent.alive:
-                agent.draw(self.surface, is_leader=(agent == leader))
+                agent.draw(self.surface, self.assets, is_leader=(agent == leader))
         
         return self.surface

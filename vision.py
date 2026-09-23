@@ -18,10 +18,12 @@ def preprocess_frame(surface):
     
     return small_frame
 
+from config import EYE_RES, LPI_INHIBITION_WEIGHT
+
 def compute_looming_stimulus(curr_frame, prev_frame, spatial_weights=None):
     """
     Calculates absolute luminance difference to detect expanding edges (looming).
-    Accepts an optional spatial_weights matrix (genome) or defaults to the baseline mask.
+    Splits field into Ventral (excitatory) and Dorsal (inhibitory) zones.
     """
     if prev_frame is None:
         return 0.0, np.zeros((EYE_RES, EYE_RES), dtype=np.float32)
@@ -29,17 +31,24 @@ def compute_looming_stimulus(curr_frame, prev_frame, spatial_weights=None):
     diff = cv2.absdiff(curr_frame, prev_frame).astype(np.float32)
     
     if spatial_weights is None:
-        # Default baseline mask to prioritize lower-forward field
         spatial_weights = np.ones((EYE_RES, EYE_RES), dtype=np.float32)
         spatial_weights[0:EYE_RES//2, :] = 0.2
         spatial_weights[EYE_RES//2:, :] = 2.0
     
-    # Ensure spatial_weights is a numpy array
     if isinstance(spatial_weights, list):
         spatial_weights = np.array(spatial_weights, dtype=np.float32)
         
     masked_diff = diff * spatial_weights
-    total_drive = np.sum(masked_diff)
+    
+    # Ventral (Lower 60%)
+    split_idx = int(EYE_RES * 0.4)
+    ventral_diff = masked_diff[split_idx:, :]
+    dorsal_diff = masked_diff[:split_idx, :]
+    
+    i_excitatory = np.sum(ventral_diff)
+    i_inhibitory = np.sum(dorsal_diff)
+    
+    total_drive = i_excitatory - (i_inhibitory * LPI_INHIBITION_WEIGHT)
     
     return total_drive, masked_diff
 

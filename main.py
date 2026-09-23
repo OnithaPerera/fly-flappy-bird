@@ -3,6 +3,7 @@ import os
 import pygame
 import numpy as np
 import random
+import time
 
 from diagnostics import run_preflight_checks, validate_frame_tensor
 run_preflight_checks() 
@@ -14,6 +15,7 @@ from config import (WINDOW_WIDTH, WINDOW_HEIGHT, ARENA_WIDTH, HUD_WIDTH, FPS,
 from game import SwarmWorld
 from vision import preprocess_frame, compute_looming_stimulus, get_colored_heatmap
 from connectome_lif import LoomingCircuitController
+from assets_loader import load_or_fetch_assets
 import sound_fx
 
 def initialize_population(size):
@@ -34,17 +36,29 @@ def run_simulation():
     font = pygame.font.SysFont("Consolas", 14)
     large_font = pygame.font.SysFont("Consolas", 18, bold=True)
     
+    try:
+        assets = load_or_fetch_assets()
+    except Exception as e:
+        print(f"Critical error loading assets: {e}")
+        sys.exit(1)
+        
     population = initialize_population(GA_POPULATION_SIZE)
-    world = SwarmWorld(population)
+    world = SwarmWorld(population, assets)
+    
+    current_seed = int(time.time())
+    world.reset(current_seed)
+    
     prev_frames = [None] * GA_POPULATION_SIZE
     
     generation = 1
     max_fitness_history = []
     all_time_record = 0
+    all_time_record_seed = current_seed
     best_overall_genome = None
     
     running = True
     paused = False
+    replay_mode = False
     
     # Speed multiplier (1, 2, 5, 15)
     speed_multiplier = 1
@@ -64,21 +78,41 @@ def run_simulation():
                     speed_multiplier = 15
                 elif event.key == pygame.K_p:
                     paused = not paused
+                elif event.key == pygame.K_r:
+                    # Toggle replay mode
+                    replay_mode = not replay_mode
+                    if replay_mode:
+                        if best_overall_genome is not None:
+                            print(f"Entering Replay Mode for seed {all_time_record_seed}")
+                            replay_brain = LoomingCircuitController(genome=best_overall_genome)
+                            world = SwarmWorld([replay_brain], assets)
+                            world.reset(all_time_record_seed)
+                            prev_frames = [None]
+                            paused = False
+                            speed_multiplier = 1
+                        else:
+                            print("No champion genome to replay yet!")
+                            replay_mode = False
+                    else:
+                        print("Exiting Replay Mode. Resuming evolution...")
+                        world = SwarmWorld(population, assets)
+                        world.reset(current_seed)
+                        prev_frames = [None] * GA_POPULATION_SIZE
+                        paused = False
                 elif event.key == pygame.K_s:
                     if best_overall_genome is not None:
                         np.save("best_fly_genome.npy", best_overall_genome)
                         print("Saved best genome.")
-                elif event.key == pygame.K_r:
-                    population = initialize_population(GA_POPULATION_SIZE)
-                    world = SwarmWorld(population)
-                    prev_frames = [None] * GA_POPULATION_SIZE
-                    generation = 1
-                    max_fitness_history = []
-                    all_time_record = 0
 
         if not paused:
             for substep in range(speed_multiplier):
                 if world.all_dead:
+                    if replay_mode:
+                        # In replay mode, just loop the replay
+                        world.reset(all_time_record_seed)
+                        prev_frames = [None]
+                        break
+                        
                     # Evolution step
                     agents = world.agents
                     
@@ -89,7 +123,9 @@ def run_simulation():
                     
                     if gen_max_fitness > all_time_record:
                         all_time_record = gen_max_fitness
+                        all_time_record_seed = current_seed
                         best_overall_genome = best_agent.brain.get_genome()
+                        print(f"New All-Time Record: {all_time_record} (Seed: {all_time_record_seed})")
                         
                     print(f"Gen {generation} | Max Fit: {gen_max_fitness} | Avg Fit: {np.mean([a.get_fitness() for a in agents]):.1f}")
                     
@@ -111,7 +147,9 @@ def run_simulation():
                         next_population.append(child)
                         
                     population = next_population
-                    world = SwarmWorld(population)
+                    world = SwarmWorld(population, assets)
+                    current_seed = int(time.time()) + generation
+                    world.reset(current_seed)
                     prev_frames = [None] * GA_POPULATION_SIZE
                     generation += 1
                     break # Break out of substeps to render the new generation
@@ -141,7 +179,7 @@ def run_simulation():
                     if i == leader_idx:
                         masked_diff_leader = masked_diff
                         
-                    flap = agent.brain.step(drive)
+                    flap = agent.brain.step(drive, agent.velocity)
                     flaps.append(flap)
                     
                     # Optional: play click for leader
@@ -171,16 +209,18 @@ def run_simulation():
         leader = world.get_leader()
         current_score = leader.get_fitness() if leader else 0
         
+        mode_text = "REPLAY MODE" if replay_mode else f"GENERATION: {generation}"
+        
         texts = [
-            f"GENERATION: {generation}",
-            f"ALIVE: {alive_count} / {GA_POPULATION_SIZE}",
+            mode_text,
+            f"ALIVE: {alive_count} / {len(world.agents)}",
             f"CURRENT FITNESS: {current_score}",
             f"ALL-TIME RECORD: {all_time_record}",
             f"SIM SPEED: {speed_multiplier}X {'(PAUSED)' if paused else ''}"
         ]
         
         for i, t in enumerate(texts):
-            color = COLOR_PHOSPHOR if i == 0 else COLOR_TEXT
+            color = COLOR_LEADER if replay_mode and i == 0 else (COLOR_PHOSPHOR if i == 0 else COLOR_TEXT)
             surf = font.render(t, True, color)
             screen.blit(surf, (hud_x + 10, 10 + i * 25))
             
@@ -192,7 +232,7 @@ def run_simulation():
         g_label = font.render("FITNESS HISTORY", True, COLOR_TEXT)
         screen.blit(g_label, (hud_x + 10, 130))
         
-        if len(max_fitness_history) > 1:
+        if len(max_fitness_history) > 1 and not replay_mode:
             pts = []
             max_val = max(100, max(max_fitness_history))
             min_val = min(max_fitness_history)
@@ -240,6 +280,16 @@ def run_simulation():
                 
             thresh_y = osc_rect.y + osc_rect.height - ((leader.brain.v_thresh - min_v) / v_range) * osc_rect.height
             pygame.draw.line(screen, COLOR_LEADER, (osc_rect.x, thresh_y), (osc_rect.x + osc_rect.width, thresh_y), 1)
+
+        # Pause Overlay
+        if paused:
+            overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 150))
+            screen.blit(overlay, (0, 0))
+            
+            pause_text = large_font.render("SIMULATION PAUSED", True, COLOR_TEXT)
+            rect = pause_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+            screen.blit(pause_text, rect)
 
         pygame.display.flip()
         clock.tick(FPS)

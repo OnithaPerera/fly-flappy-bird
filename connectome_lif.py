@@ -1,6 +1,6 @@
 import numpy as np
 from config import (V_REST, V_RESET, V_THRESH, BETA, REFRACTORY_PERIOD, SYNAPTIC_GAIN, EYE_RES,
-                    BOUND_BETA, BOUND_THRESH, BOUND_GAIN, BOUND_WEIGHT)
+                    BOUND_BETA, BOUND_THRESH, BOUND_GAIN, BOUND_WEIGHT, HALTERE_DAMPING)
 
 class LoomingCircuitController:
     def __init__(self, genome=None):
@@ -72,18 +72,19 @@ class LoomingCircuitController:
         print(f"FlyWire Connectome hook called with token {token[:5]}... (stub).")
         pass
         
-    def step(self, total_drive):
+    def step(self, total_drive, vertical_velocity):
         """
-        Leaky Integrate-and-Fire simulation step.
-        Note: The visual processing now multiplies spatial_weights, so total_drive
-        is the already weighted visual current.
-        Returns True if action potential fires (FLAP command).
+        Leaky Integrate-and-Fire simulation step with Haltere proprioception.
         """
         if self.refractory_timer > 0:
             self.refractory_timer -= 1
             self.v = V_RESET
             self.voltage_history.append(self.v)
             return False
+            
+        # Haltere Proprioceptive Damping
+        if vertical_velocity < 0:
+            total_drive *= HALTERE_DAMPING
             
         # LIF Equation
         self.v = (self.v - V_REST) * self.beta + V_REST + (total_drive * self.synaptic_gain)
@@ -92,7 +93,7 @@ class LoomingCircuitController:
         
         if self.v >= self.v_thresh:
             self.v = V_RESET
-            self.refractory_timer = REFRACTORY_PERIOD
+            self.refractory_timer = 7 # 7 frames absolute refractory
             return True
             
         return False
