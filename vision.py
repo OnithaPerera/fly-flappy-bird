@@ -11,9 +11,9 @@ def extract_forward_binary_grid(surface, bird_x):
     """
     start_x = int(bird_x)
     
-    # Crop horizontally from x = bird_x to x = min(ARENA_WIDTH, bird_x + 320)
+    # Crop horizontally from x = bird_x to x = min(ARENA_WIDTH, bird_x + 360)
     # Crop vertically from y = 0 to y = GROUND_Y
-    crop_w = min(320, ARENA_WIDTH - start_x)
+    crop_w = min(360, ARENA_WIDTH - start_x)
     crop_h = GROUND_Y
     
     # Ensure we don't go out of bounds of the surface

@@ -2,13 +2,13 @@ import pygame
 import random
 import math
 import numpy as np
-from config import (ARENA_WIDTH, WINDOW_HEIGHT, GRAVITY, FLAP_STRENGTH, 
-                    PIPE_SPEED, PIPE_SPACING, PIPE_GAP, CEILING_DEATH_PENALTY)
+from config import (ARENA_WIDTH, ARENA_HEIGHT, GRAVITY, FLAP_STRENGTH, 
+                    PIPE_SPEED, PIPE_SPACING, PIPE_GAP, CEILING_DEATH_PENALTY, GROUND_Y)
 
 class FlyAgent:
     def __init__(self, beta, v_thresh):
         self.x = 50
-        self.y = WINDOW_HEIGHT // 2
+        self.y = ARENA_HEIGHT // 2
         self.velocity = 0
         self.rect = pygame.Rect(self.x - 10, self.y - 10, 20, 20)
         self.is_flapping = False
@@ -110,12 +110,16 @@ class PipePair:
         self.width = pipe_surf.get_width()
         
         min_y = 100
-        max_y = WINDOW_HEIGHT - ground_h - 100
+        max_y = ARENA_HEIGHT - ground_h - 100
         self.gap_y = random.randint(min_y, max_y)
         
         # Bottom pipe
         bottom_y = self.gap_y + PIPE_GAP // 2
-        self.bottom_rect = pygame.Rect(self.x, bottom_y, self.width, WINDOW_HEIGHT - bottom_y)
+        self.bottom_rect = pygame.Rect(self.x, bottom_y, self.width, GROUND_Y - bottom_y)
+        
+        # Scale the lower pipe surface to reach exactly to the ground
+        lower_height = GROUND_Y - bottom_y
+        self.lower_pipe_surf = pygame.transform.scale(self.pipe_surf, (self.width, int(lower_height)))
         
         # Top pipe
         self.top_rect = pygame.Rect(self.x, 0, self.width, self.gap_y - PIPE_GAP // 2)
@@ -128,8 +132,8 @@ class PipePair:
         self.bottom_rect.x = self.x
 
     def draw(self, surface):
-        # Draw bottom pipe
-        surface.blit(self.pipe_surf, (self.top_rect.x, self.bottom_rect.y))
+        # Draw bottom pipe (using our pre-scaled surface)
+        surface.blit(self.lower_pipe_surf, (self.top_rect.x, self.bottom_rect.y))
         
         # Draw top pipe (flipped vertically)
         flipped_pipe = pygame.transform.flip(self.pipe_surf, False, True)
@@ -141,7 +145,7 @@ class PipePair:
 
 class SwarmWorld:
     def __init__(self, genomes, assets):
-        self.surface = pygame.Surface((ARENA_WIDTH, WINDOW_HEIGHT))
+        self.surface = pygame.Surface((ARENA_WIDTH, ARENA_HEIGHT))
         self.genomes = genomes
         self.assets = assets
         self.ground_h = self.assets["ground"].get_height()
@@ -215,7 +219,7 @@ class SwarmWorld:
         for agent in self.agents:
             if not agent.alive: continue
             
-            if agent.y >= WINDOW_HEIGHT - self.ground_h - 10:
+            if agent.y >= ARENA_HEIGHT - self.ground_h - 10:
                 agent.alive = False
                 agent.death_frame = self.frames
                 agent.lethal_penalty += 300.0
@@ -241,8 +245,8 @@ class SwarmWorld:
             pipe.draw(self.surface)
             
         # Draw ground
-        self.surface.blit(self.assets["ground"], (self.ground_x, WINDOW_HEIGHT - self.ground_h))
-        self.surface.blit(self.assets["ground"], (self.ground_x + ARENA_WIDTH, WINDOW_HEIGHT - self.ground_h))
+        self.surface.blit(self.assets["ground"], (self.ground_x, ARENA_HEIGHT - self.ground_h))
+        self.surface.blit(self.assets["ground"], (self.ground_x + ARENA_WIDTH, ARENA_HEIGHT - self.ground_h))
         
         return self.surface
         

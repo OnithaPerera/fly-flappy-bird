@@ -104,10 +104,10 @@ class BrainVisualizer:
         haltere_act = min(1.0, abs(vel))
         
         # Colors based on requested spec
-        cyan_base = hex_to_rgb("#0088AA")
+        cyan_base = hex_to_rgb("#00AACC")
         cyan_glow = hex_to_rgb("#00FFFF")
         red_color = hex_to_rgb("#FF3366")
-        amber_color = hex_to_rgb("#FFAA00")
+        amber_color = hex_to_rgb("#FF9900")
         magenta_color = hex_to_rgb("#CC00FF")
         
         # Spawn sensory particles
@@ -173,24 +173,35 @@ class BrainVisualizer:
                 self.particles.remove(p)
                 
         # --- DRAW DENDRITIC CLUSTERS / LOBES ---
-        def draw_lobe(pos, base_color, glow_color, intensity, radius, label, num_branches=5):
+        def draw_lobe(pos, base_color, glow_color, intensity, radius, label, num_branches=40):
             glow_alpha = min(255, int(intensity * 255))
             if glow_alpha > 0:
                 glow_surf = pygame.Surface((radius*4, radius*4), pygame.SRCALPHA)
-                pygame.draw.circle(glow_surf, (*glow_color, int(glow_alpha*0.4)), (radius*2, radius*2), radius*2)
-                surface.blit(glow_surf, (pos[0]-radius*2, pos[1]-radius*2))
+                pygame.draw.circle(glow_surf, (*glow_color, int(glow_alpha*0.15)), (radius*2, radius*2), radius*2)
+                pygame.draw.circle(glow_surf, (*glow_color, int(glow_alpha*0.3)), (radius*2, radius*2), radius)
+                surface.blit(glow_surf, (pos[0]-radius*2, pos[1]-radius*2), special_flags=pygame.BLEND_ADD)
                 
-            # Draw core cluster
-            pygame.draw.circle(surface, base_color, pos, radius)
-            
-            # Draw branches
+            # Draw dense network of branching filaments
+            filament_surf = pygame.Surface((radius*4, radius*4), pygame.SRCALPHA)
             for i in range(num_branches):
-                angle = (i / num_branches) * math.pi * 2 + (intensity * 2) # Slowly rotate/animate slightly with intensity
-                branch_len = radius * (1.0 + intensity * 0.5)
-                end_x = pos[0] + math.cos(angle) * branch_len
-                end_y = pos[1] + math.sin(angle) * branch_len
-                pygame.draw.line(surface, glow_color, pos, (int(end_x), int(end_y)), 2)
+                angle = (i / num_branches) * math.pi * 2 + (intensity * 1.5) + random.uniform(-0.1, 0.1)
+                branch_len = radius * random.uniform(0.5, 1.5) * (1.0 + intensity * 0.3)
+                start_x, start_y = radius*2, radius*2
+                end_x = start_x + math.cos(angle) * branch_len
+                end_y = start_y + math.sin(angle) * branch_len
                 
+                # Draw main filament
+                pygame.draw.line(filament_surf, (*base_color, 180), (int(start_x), int(start_y)), (int(end_x), int(end_y)), 2)
+                # Draw sub-branch
+                if i % 3 == 0:
+                    sub_angle = angle + random.uniform(-0.5, 0.5)
+                    sub_len = branch_len * 0.5
+                    sub_end_x = end_x + math.cos(sub_angle) * sub_len
+                    sub_end_y = end_y + math.sin(sub_angle) * sub_len
+                    pygame.draw.line(filament_surf, (*glow_color, int(glow_alpha*0.6)), (int(end_x), int(end_y)), (int(sub_end_x), int(sub_end_y)), 1)
+            
+            surface.blit(filament_surf, (pos[0]-radius*2, pos[1]-radius*2), special_flags=pygame.BLEND_ADD)
+            
             label_surf = self.font.render(label, True, COLOR_TEXT)
             surface.blit(label_surf, (pos[0] - label_surf.get_width()//2, pos[1] + radius + 15))
             
@@ -218,16 +229,25 @@ class BrainVisualizer:
         )
         
         # Outer soft glow
-        cc_glow = pygame.Surface((100, 100), pygame.SRCALPHA)
-        pygame.draw.circle(cc_glow, (*amber_color, int(gf_fill * 100)), (50, 50), 40)
-        surface.blit(cc_glow, (cc_pos[0]-50, cc_pos[1]-50))
+        cc_glow = pygame.Surface((140, 140), pygame.SRCALPHA)
+        pygame.draw.circle(cc_glow, (*amber_color, int(gf_fill * 80)), (70, 70), 50)
+        surface.blit(cc_glow, (cc_pos[0]-70, cc_pos[1]-70), special_flags=pygame.BLEND_ADD)
         
-        # Outer ring
-        pygame.draw.circle(surface, (amber_color[0]//3, amber_color[1]//3, 0), cc_pos, 35, 4)
-        pygame.draw.circle(surface, amber_color, cc_pos, 35, max(1, int(haltere_act * 5)))
+        # Draw toroidal fiber loops (Mushroom Body / Central Complex)
+        loop_surf = pygame.Surface((100, 100), pygame.SRCALPHA)
+        num_loops = 36
+        for i in range(num_loops):
+            angle = (i / num_loops) * math.pi * 2
+            r1 = 15
+            r2 = 35 + gf_fill * 10
+            x1 = 50 + math.cos(angle) * r1
+            y1 = 50 + math.sin(angle) * r1
+            x2 = 50 + math.cos(angle + 0.3) * r2
+            y2 = 50 + math.sin(angle + 0.3) * r2
+            pygame.draw.line(loop_surf, (*amber_color, 120), (int(x1), int(y1)), (int(x2), int(y2)), 2)
+            pygame.draw.line(loop_surf, (*core_color, 200), (int(x2), int(y2)), (int(50 + math.cos(angle+0.6)*r1), int(50 + math.sin(angle+0.6)*r1)), 1)
         
-        # Inner core
-        pygame.draw.circle(surface, core_color, cc_pos, 25)
+        surface.blit(loop_surf, (cc_pos[0]-50, cc_pos[1]-50), special_flags=pygame.BLEND_ADD)
         
         # Central Complex Label
         hal_surf = self.font.render("Central Complex", True, COLOR_TEXT)
@@ -235,10 +255,10 @@ class BrainVisualizer:
         
         # Spike Flash (White/Cyan Blast on Central Complex)
         if self.gf_flash_alpha > 0:
-            flash_surf = pygame.Surface((100, 100), pygame.SRCALPHA)
-            pygame.draw.circle(flash_surf, (200, 255, 255, self.gf_flash_alpha), (50, 50), 40)
-            pygame.draw.circle(flash_surf, (255, 255, 255, self.gf_flash_alpha), (50, 50), 20)
-            surface.blit(flash_surf, (cc_pos[0]-50, cc_pos[1]-50))
+            flash_surf = pygame.Surface((160, 160), pygame.SRCALPHA)
+            pygame.draw.circle(flash_surf, (150, 255, 255, self.gf_flash_alpha), (80, 80), 60)
+            pygame.draw.circle(flash_surf, (255, 255, 255, self.gf_flash_alpha), (80, 80), 30)
+            surface.blit(flash_surf, (cc_pos[0]-80, cc_pos[1]-80), special_flags=pygame.BLEND_ADD)
             
         # --- DRAW THORACIC MOTOR GANGLION ---
         mn_pos = self.nodes["mn"]
@@ -248,7 +268,7 @@ class BrainVisualizer:
         if self.mn_flash_alpha > 0:
             mn_glow = pygame.Surface((100, 100), pygame.SRCALPHA)
             pygame.draw.circle(mn_glow, (*hex_to_rgb("#00FF00"), self.mn_flash_alpha), (50, 50), 35)
-            surface.blit(mn_glow, (mn_pos[0]-50, mn_pos[1]-50))
+            surface.blit(mn_glow, (mn_pos[0]-50, mn_pos[1]-50), special_flags=pygame.BLEND_ADD)
             
         mn_label = self.font.render("Thoracic Motor Ganglion", True, COLOR_TEXT)
         surface.blit(mn_label, (mn_pos[0] - mn_label.get_width()//2, mn_pos[1] + 30))
