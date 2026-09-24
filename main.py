@@ -92,6 +92,7 @@ def run_simulation():
     running = True
     paused = False
     replay_mode = False
+    replay_finished = False
     
     # Speed multiplier (1, 2, 5, 15)
     speed_multiplier = 1
@@ -113,6 +114,7 @@ def run_simulation():
                     paused = not paused
                 elif event.key == pygame.K_r:
                     replay_mode = not replay_mode
+                    replay_finished = False
                     if replay_mode:
                         if best_overall_genome is not None:
                             print(f"Entering Replay Mode for seed {all_time_record_seed}")
@@ -134,6 +136,12 @@ def run_simulation():
                         world = SwarmWorld(batched_snn.genomes, assets)
                         world.reset(current_seed)
                         paused = False
+                elif event.key == pygame.K_SPACE:
+                    if replay_mode and replay_finished:
+                        world.reset(all_time_record_seed)
+                        batched_snn.reset_states()
+                        replay_finished = False
+                        paused = False
                 elif event.key == pygame.K_s:
                     if best_overall_genome is not None:
                         np.save("champion_genome.npy", best_overall_genome)
@@ -149,9 +157,8 @@ def run_simulation():
             for substep in range(speed_multiplier):
                 if world.all_dead:
                     if replay_mode:
-                        world.reset(all_time_record_seed)
-                        batched_snn.reset_states()
-                        prev_frames = [None]
+                        replay_finished = True
+                        paused = True
                         break
                         
                     # Evolution step
@@ -331,7 +338,10 @@ def run_simulation():
             spiked = bool(flaps[leader_idx])
             brain_visualizer.update_and_draw(virtual_screen, leader_inputs, v, spiked)
         
-        mode_text = "REPLAY MODE" if replay_mode else f"GEN: {generation} | SEED: {current_eval_idx+1}/{len(EVAL_SEEDS)}"
+        if replay_mode:
+            mode_text = f"REPLAYING ALL-TIME CHAMPION (Record: {int(all_time_record)}) | Press [R] to Exit"
+        else:
+            mode_text = f"GEN: {generation} | SEED: {current_eval_idx+1}/{len(EVAL_SEEDS)}"
         
         mut_rate = max(MIN_MUT_RATE, INITIAL_MUT_RATE * (DECAY_RATE ** generation))
         mut_scale = max(MIN_MUT_SCALE, INITIAL_MUT_SCALE * (DECAY_RATE ** generation))
@@ -434,7 +444,10 @@ def run_simulation():
             overlay.fill((0, 0, 0, 150))
             virtual_screen.blit(overlay, (0, 0))
             
-            pause_text = large_font.render("SIMULATION PAUSED", True, COLOR_TEXT)
+            if replay_mode and replay_finished:
+                pause_text = large_font.render("REPLAY FINISHED - Press [SPACE] to replay again or [R] to return to evolution", True, COLOR_TEXT)
+            else:
+                pause_text = large_font.render("SIMULATION PAUSED", True, COLOR_TEXT)
             rect = pause_text.get_rect(center=(CANVAS_WIDTH // 2, CANVAS_HEIGHT // 2))
             virtual_screen.blit(pause_text, rect)
 

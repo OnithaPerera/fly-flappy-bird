@@ -104,9 +104,9 @@ class BrainVisualizer:
         haltere_act = min(1.0, abs(vel))
         
         # Colors based on requested spec
-        cyan_base = hex_to_rgb("#00AACC")
+        cyan_base = hex_to_rgb("#006688")
         cyan_glow = hex_to_rgb("#00FFFF")
-        red_color = hex_to_rgb("#FF3366")
+        red_color = hex_to_rgb("#FF3355")
         amber_color = hex_to_rgb("#FF9900")
         magenta_color = hex_to_rgb("#CC00FF")
         
@@ -129,8 +129,8 @@ class BrainVisualizer:
         self.mn_flash_alpha = max(0, self.mn_flash_alpha - 15)
         
         # --- DRAW ANATOMICAL SILHOUETTE ---
-        # Draw translucent outer neuropil shell (Navy Blue: #081224)
-        capsule_color = hex_to_rgb("#081224")
+        # Draw translucent outer neuropil shell (Navy Blue: #071120)
+        capsule_color = hex_to_rgb("#071120")
         cap_surf = pygame.Surface((400, 300), pygame.SRCALPHA)
         
         # Draw actual contour of insect brain (broad lateral lobes tapering inward)
@@ -238,8 +238,8 @@ class BrainVisualizer:
         draw_lobe(self.nodes["lpi_r"], (100, 0, 0), red_color, lpi_act, 15, "LPi (R)")
         
         # Draw LPLC2 (Lateral Optic Lobes)
-        draw_lobe(self.nodes["lplc2_l"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (L)", num_branches=60)
-        draw_lobe(self.nodes["lplc2_r"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (R)", num_branches=60)
+        draw_lobe(self.nodes["lplc2_l"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (L)", num_branches=40)
+        draw_lobe(self.nodes["lplc2_r"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (R)", num_branches=40)
         
         # --- DRAW CENTRAL COMPLEX (Ellipsoid Body) ---
         cc_pos = self.nodes["central_complex"]

@@ -105,7 +105,7 @@ def load_or_fetch_assets():
             
             cap_h = int(26 * (pipe_height / pipe_rect.height))
             assets["pipe_cap"] = assets["pipe"].subsurface((0, 0, pipe_width, cap_h)).copy()
-            assets["pipe_body"] = assets["pipe"].subsurface((0, cap_h, pipe_width, pipe_height - cap_h)).copy()
+            assets["pipe_body"] = assets["pipe"].subsurface((0, cap_h + 10, pipe_width, 1)).copy()
             
             assets["ground"] = pygame.image.load(os.path.join(ASSETS_DIR, ASSET_FILES["ground"])).convert()
             assets["ground"] = pygame.transform.scale(assets["ground"], (ARENA_WIDTH * 2, int(CANVAS_HEIGHT * 0.2)))
@@ -128,7 +128,7 @@ def load_or_fetch_assets():
         pygame.draw.rect(pipe_surf, (84, 155, 33), (-2, 0, pipe_w+4, 30), 2)
         assets["pipe"] = pipe_surf
         assets["pipe_cap"] = pipe_surf.subsurface((0, 0, pipe_w, 30)).copy()
-        assets["pipe_body"] = pipe_surf.subsurface((0, 30, pipe_w, pipe_h - 30)).copy()
+        assets["pipe_body"] = pipe_surf.subsurface((0, 40, pipe_w, 1)).copy()
         
         ground_h = int(CANVAS_HEIGHT * 0.2)
         ground_surf = pygame.Surface((ARENA_WIDTH * 2, ground_h))
