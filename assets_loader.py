@@ -1,7 +1,7 @@
 import os
 import urllib.request
 import pygame
-from config import ARENA_WIDTH, WINDOW_HEIGHT
+from config import ARENA_WIDTH, CANVAS_HEIGHT
 
 ASSETS_DIR = "assets"
 BASE_URL = "https://raw.githubusercontent.com/samuelcust/flappy-bird-assets/master/sprites/"
@@ -95,7 +95,7 @@ def load_or_fetch_assets():
     if not fallback_mode:
         try:
             assets["background"] = pygame.image.load(os.path.join(ASSETS_DIR, ASSET_FILES["background"])).convert()
-            assets["background"] = pygame.transform.scale(assets["background"], (ARENA_WIDTH, WINDOW_HEIGHT))
+            assets["background"] = pygame.transform.scale(assets["background"], (ARENA_WIDTH, CANVAS_HEIGHT))
             
             assets["pipe"] = pygame.image.load(os.path.join(ASSETS_DIR, ASSET_FILES["pipe"])).convert_alpha()
             pipe_rect = assets["pipe"].get_rect()
@@ -103,8 +103,12 @@ def load_or_fetch_assets():
             pipe_height = int(pipe_rect.height * (pipe_width / pipe_rect.width))
             assets["pipe"] = pygame.transform.scale(assets["pipe"], (pipe_width, pipe_height))
             
+            cap_h = int(26 * (pipe_height / pipe_rect.height))
+            assets["pipe_cap"] = assets["pipe"].subsurface((0, 0, pipe_width, cap_h)).copy()
+            assets["pipe_body"] = assets["pipe"].subsurface((0, cap_h, pipe_width, pipe_height - cap_h)).copy()
+            
             assets["ground"] = pygame.image.load(os.path.join(ASSETS_DIR, ASSET_FILES["ground"])).convert()
-            assets["ground"] = pygame.transform.scale(assets["ground"], (ARENA_WIDTH * 2, int(WINDOW_HEIGHT * 0.2)))
+            assets["ground"] = pygame.transform.scale(assets["ground"], (ARENA_WIDTH * 2, int(CANVAS_HEIGHT * 0.2)))
                 
         except Exception as e:
             print(f"Error loading images: {e}. Enabling fallback textures.")
@@ -112,19 +116,21 @@ def load_or_fetch_assets():
             
     if fallback_mode:
         print("[Assets Loader] Using procedural fallback assets.")
-        assets["background"] = pygame.Surface((ARENA_WIDTH, WINDOW_HEIGHT))
+        assets["background"] = pygame.Surface((ARENA_WIDTH, CANVAS_HEIGHT))
         assets["background"].fill((112, 197, 206))
         
         pipe_w = int(ARENA_WIDTH * 0.15)
-        pipe_h = WINDOW_HEIGHT
+        pipe_h = CANVAS_HEIGHT
         pipe_surf = pygame.Surface((pipe_w, pipe_h), pygame.SRCALPHA)
         pygame.draw.rect(pipe_surf, (116, 191, 46), (0, 0, pipe_w, pipe_h))
         pygame.draw.rect(pipe_surf, (84, 155, 33), (0, 0, pipe_w, pipe_h), 2)
         pygame.draw.rect(pipe_surf, (116, 191, 46), (-2, 0, pipe_w+4, 30))
         pygame.draw.rect(pipe_surf, (84, 155, 33), (-2, 0, pipe_w+4, 30), 2)
         assets["pipe"] = pipe_surf
+        assets["pipe_cap"] = pipe_surf.subsurface((0, 0, pipe_w, 30)).copy()
+        assets["pipe_body"] = pipe_surf.subsurface((0, 30, pipe_w, pipe_h - 30)).copy()
         
-        ground_h = int(WINDOW_HEIGHT * 0.2)
+        ground_h = int(CANVAS_HEIGHT * 0.2)
         ground_surf = pygame.Surface((ARENA_WIDTH * 2, ground_h))
         ground_surf.fill((221, 216, 148))
         pygame.draw.rect(ground_surf, (115, 190, 46), (0, 0, ARENA_WIDTH * 2, 10))

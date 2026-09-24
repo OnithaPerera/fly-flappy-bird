@@ -104,25 +104,40 @@ class FlyAgent:
             pygame.draw.circle(surface, (255, 179, 0, 150), (int(self.x), int(self.y)), 30, 2)
 
 class PipePair:
-    def __init__(self, x_pos, pipe_surf, ground_h):
+    def __init__(self, x_pos, assets, ground_h):
         self.x = x_pos
-        self.pipe_surf = pipe_surf
-        self.width = pipe_surf.get_width()
+        self.pipe_cap = assets["pipe_cap"]
+        self.pipe_body = assets["pipe_body"]
+        self.width = self.pipe_cap.get_width()
+        self.cap_height = self.pipe_cap.get_height()
         
         min_y = 100
         max_y = ARENA_HEIGHT - ground_h - 100
         self.gap_y = random.randint(min_y, max_y)
         
-        # Bottom pipe
+        # Bottom pipe logic
         bottom_y = self.gap_y + PIPE_GAP // 2
         self.bottom_rect = pygame.Rect(self.x, bottom_y, self.width, GROUND_Y - bottom_y)
         
-        # Scale the lower pipe surface to reach exactly to the ground
-        lower_height = GROUND_Y - bottom_y
-        self.lower_pipe_surf = pygame.transform.scale(self.pipe_surf, (self.width, int(lower_height)))
+        # Scale the lower pipe body to reach exactly to the ground
+        lower_body_height = GROUND_Y - (bottom_y + self.cap_height)
+        if lower_body_height > 0:
+            self.lower_body_surf = pygame.transform.scale(self.pipe_body, (self.width, int(lower_body_height)))
+        else:
+            self.lower_body_surf = None
+            
+        # Top pipe logic
+        top_y = self.gap_y - PIPE_GAP // 2
+        self.top_rect = pygame.Rect(self.x, 0, self.width, top_y)
         
-        # Top pipe
-        self.top_rect = pygame.Rect(self.x, 0, self.width, self.gap_y - PIPE_GAP // 2)
+        top_body_height = top_y - self.cap_height
+        if top_body_height > 0:
+            self.top_body_surf = pygame.transform.scale(self.pipe_body, (self.width, int(top_body_height)))
+        else:
+            self.top_body_surf = None
+            
+        # Pre-flip the top cap
+        self.top_cap_surf = pygame.transform.flip(self.pipe_cap, False, True)
         
         self.passed = False
 
@@ -132,16 +147,15 @@ class PipePair:
         self.bottom_rect.x = self.x
 
     def draw(self, surface):
-        # Draw bottom pipe (using our pre-scaled surface)
-        surface.blit(self.lower_pipe_surf, (self.top_rect.x, self.bottom_rect.y))
-        
-        # Draw top pipe (flipped vertically)
-        flipped_pipe = pygame.transform.flip(self.pipe_surf, False, True)
-        
-        # We need to slice the bottom part of the flipped pipe so it ends at top_rect.bottom
-        pipe_h = flipped_pipe.get_height()
-        blit_y = self.top_rect.bottom - pipe_h
-        surface.blit(flipped_pipe, (self.top_rect.x, blit_y))
+        # Draw bottom pipe
+        surface.blit(self.pipe_cap, (self.bottom_rect.x, self.bottom_rect.y))
+        if self.lower_body_surf:
+            surface.blit(self.lower_body_surf, (self.bottom_rect.x, self.bottom_rect.y + self.cap_height))
+            
+        # Draw top pipe
+        if self.top_body_surf:
+            surface.blit(self.top_body_surf, (self.top_rect.x, 0))
+        surface.blit(self.top_cap_surf, (self.top_rect.x, self.top_rect.bottom - self.cap_height))
 
 class SwarmWorld:
     def __init__(self, genomes, assets):
@@ -161,7 +175,7 @@ class SwarmWorld:
         self.all_dead = False
         
         # Spawn first pipe early
-        self.pipes.append(PipePair(260, self.assets["pipe"], self.ground_h))
+        self.pipes.append(PipePair(260, self.assets, self.ground_h))
 
     def get_leader(self):
         alive_agents = [a for a in self.agents if a.alive]
@@ -197,7 +211,7 @@ class SwarmWorld:
         
         # Spawn pipes based on distance
         if len(self.pipes) > 0 and (ARENA_WIDTH - self.pipes[-1].x) >= PIPE_SPACING:
-            self.pipes.append(PipePair(ARENA_WIDTH, self.assets["pipe"], self.ground_h))
+            self.pipes.append(PipePair(ARENA_WIDTH, self.assets, self.ground_h))
             
         for pipe in self.pipes:
             pipe.update()

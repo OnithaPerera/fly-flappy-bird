@@ -154,16 +154,44 @@ class BrainVisualizer:
         
         # --- DRAW FIBER TRACTS ---
         # Connections from LPi to Center (Dorsal Inhibitory Tracts)
-        pygame.draw.line(surface, red_color, self.nodes["lpi_l"], self.nodes["central_complex"], 4)
-        pygame.draw.line(surface, red_color, self.nodes["lpi_r"], self.nodes["central_complex"], 4)
+        # Arching upper neural filaments
+        for i in range(8):
+            offset_y = random.uniform(-10, 5)
+            pygame.draw.line(surface, (*red_color, 150), 
+                             (int(self.nodes["lpi_l"][0]), int(self.nodes["lpi_l"][1] + offset_y)), 
+                             (int(self.nodes["central_complex"][0]), int(self.nodes["central_complex"][1])), 1)
+            pygame.draw.line(surface, (*red_color, 150), 
+                             (int(self.nodes["lpi_r"][0]), int(self.nodes["lpi_r"][1] + offset_y)), 
+                             (int(self.nodes["central_complex"][0]), int(self.nodes["central_complex"][1])), 1)
         
         # Connections from LPLC2 to Center
-        pygame.draw.line(surface, cyan_base, self.nodes["lplc2_l"], self.nodes["central_complex"], 6)
-        pygame.draw.line(surface, cyan_base, self.nodes["lplc2_r"], self.nodes["central_complex"], 6)
+        for i in range(12):
+            offset_y = random.uniform(-15, 15)
+            pygame.draw.line(surface, (*cyan_base, 100), 
+                             (int(self.nodes["lplc2_l"][0]), int(self.nodes["lplc2_l"][1] + offset_y)), 
+                             (int(self.nodes["central_complex"][0]), int(self.nodes["central_complex"][1])), 1)
+            pygame.draw.line(surface, (*cyan_base, 100), 
+                             (int(self.nodes["lplc2_r"][0]), int(self.nodes["lplc2_r"][1] + offset_y)), 
+                             (int(self.nodes["central_complex"][0]), int(self.nodes["central_complex"][1])), 1)
         
-        # Twin Giant Fiber Descending Nerve Cords
-        pygame.draw.line(surface, magenta_color, self.gf_l_start, self.gf_l_end, 8)
-        pygame.draw.line(surface, magenta_color, self.gf_r_start, self.gf_r_end, 8)
+        # Twin Giant Fiber Descending Nerve Cords (Dense bundle of magenta/purple axon fibers)
+        gf_bundle_surf = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
+        for i in range(20):
+            offset_x = random.uniform(-6, 6)
+            curve_offset = random.uniform(-4, 4)
+            # Left bundle
+            l_start = (int(self.gf_l_start[0] + offset_x), int(self.gf_l_start[1]))
+            l_mid = (int(self.gf_l_start[0] + offset_x + curve_offset), int((self.gf_l_start[1] + self.gf_l_end[1]) // 2))
+            l_end = (int(self.gf_l_end[0] + offset_x), int(self.gf_l_end[1]))
+            pygame.draw.lines(gf_bundle_surf, (*magenta_color, 120), False, [l_start, l_mid, l_end], 1)
+            
+            # Right bundle
+            r_start = (int(self.gf_r_start[0] + offset_x), int(self.gf_r_start[1]))
+            r_mid = (int(self.gf_r_start[0] + offset_x - curve_offset), int((self.gf_r_start[1] + self.gf_r_end[1]) // 2))
+            r_end = (int(self.gf_r_end[0] + offset_x), int(self.gf_r_end[1]))
+            pygame.draw.lines(gf_bundle_surf, (*magenta_color, 120), False, [r_start, r_mid, r_end], 1)
+            
+        surface.blit(gf_bundle_surf, (0, 0), special_flags=pygame.BLEND_ADD)
         
         # Update and draw particles
         for p in self.particles[:]:
@@ -210,8 +238,8 @@ class BrainVisualizer:
         draw_lobe(self.nodes["lpi_r"], (100, 0, 0), red_color, lpi_act, 15, "LPi (R)")
         
         # Draw LPLC2 (Lateral Optic Lobes)
-        draw_lobe(self.nodes["lplc2_l"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (L)", num_branches=8)
-        draw_lobe(self.nodes["lplc2_r"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (R)", num_branches=8)
+        draw_lobe(self.nodes["lplc2_l"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (L)", num_branches=60)
+        draw_lobe(self.nodes["lplc2_r"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (R)", num_branches=60)
         
         # --- DRAW CENTRAL COMPLEX (Ellipsoid Body) ---
         cc_pos = self.nodes["central_complex"]

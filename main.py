@@ -444,7 +444,7 @@ def run_simulation():
         new_w = int(CANVAS_WIDTH * scale)
         new_h = int(CANVAS_HEIGHT * scale)
         scaled_surf = pygame.transform.smoothscale(virtual_screen, (new_w, new_h))
-        screen.fill((0, 0, 0))
+        screen.fill((7, 10, 19))
         screen.blit(scaled_surf, ((win_w - new_w) // 2, (win_h - new_h) // 2))
 
         pygame.display.flip()
