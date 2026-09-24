@@ -46,24 +46,22 @@ class Particle:
             tail_pos = (int(self.x - self.vx * 3), int(self.y - self.vy * 3))
             pygame.draw.line(surface, self.color, tail_pos, pos, self.size)
 
-
 class BrainVisualizer:
     def __init__(self, rect):
         self.rect = pygame.Rect(rect)
         self.center_x = self.rect.x + self.rect.width // 2
         self.center_y = self.rect.y + self.rect.height // 2 - 50
         
-        # Define node positions based on FlyWire anatomical connectome layout
+        # Define functional regions mapping
         self.nodes = {
-            "lpi_l": (self.center_x - 120, self.center_y - 120),  # Dorsal tracts
-            "lpi_r": (self.center_x + 120, self.center_y - 120),
-            "lplc2_l": (self.center_x - 150, self.center_y + 20), # Lateral optic lobes
-            "lplc2_r": (self.center_x + 150, self.center_y + 20),
-            "central_complex": (self.center_x, self.center_y),    # Central core
-            "mn": (self.center_x, self.center_y + 200)            # Thoracic Motor Ganglion
+            "lpi_l": (self.center_x - 70, self.center_y - 60),
+            "lpi_r": (self.center_x + 70, self.center_y - 60),
+            "lplc2_l": (self.center_x - 130, self.center_y),
+            "lplc2_r": (self.center_x + 130, self.center_y),
+            "central_complex": (self.center_x, self.center_y),
+            "mn": (self.center_x, self.center_y + 190)
         }
         
-        # Helper points for curved descending twin tracts
         self.gf_l_start = (self.center_x - 15, self.center_y + 30)
         self.gf_r_start = (self.center_x + 15, self.center_y + 30)
         self.gf_l_end = (self.center_x - 10, self.center_y + 190)
@@ -72,231 +70,207 @@ class BrainVisualizer:
         self.particles = []
         self.gf_flash_alpha = 0
         self.mn_flash_alpha = 0
-        
         self.font = pygame.font.SysFont("Consolas", 12)
         
+        # 1. Precomputed Anatomical Filament Mesh
+        self.fibers = []
+        self._generate_fibers()
+
+    def _generate_fibers(self):
+        def add_fibers(f_type, cx, cy, count, base_angle, spread_angle, min_r, max_r, segments, seg_len, curve):
+            for _ in range(count):
+                pts = []
+                angle = base_angle + random.uniform(-spread_angle, spread_angle)
+                r = random.uniform(min_r, max_r)
+                px, py = cx + math.cos(angle)*r, cy + math.sin(angle)*r
+                pts.append((px, py))
+                
+                cur_angle = angle
+                for _ in range(segments):
+                    cur_angle += random.uniform(-curve, curve)
+                    sl = random.uniform(seg_len * 0.5, seg_len * 1.5)
+                    px += math.cos(cur_angle)*sl
+                    py += math.sin(cur_angle)*sl
+                    pts.append((px, py))
+                self.fibers.append({"type": f_type, "points": pts})
+
+        # Optic Lobes Left (Kidney-shaped outward fanning)
+        add_fibers("optic_l", self.center_x - 120, self.center_y, 70, math.pi, math.pi/1.5, 10, 40, 8, 12, 0.4)
+        
+        # Optic Lobes Right
+        add_fibers("optic_r", self.center_x + 120, self.center_y, 70, 0, math.pi/1.5, 10, 40, 8, 12, 0.4)
+        
+        # Central Complex & Fan-Shaped Body (Center Core)
+        add_fibers("central", self.center_x, self.center_y, 70, 0, math.pi, 5, 25, 8, 8, 1.2)
+        
+        # Antennal Lobes & Subesophageal Zone (Lower Center)
+        add_fibers("antennal", self.center_x, self.center_y + 50, 60, 0, math.pi, 5, 20, 6, 8, 1.5)
+        
+        # Dorsal Calyces / Mushroom Bodies (Upper Arch)
+        add_fibers("mushroom", self.center_x, self.center_y - 60, 60, -math.pi/2, math.pi/2.5, 5, 25, 7, 15, 0.5)
+        
+        # Descending Giant Fiber Tracts
+        for _ in range(15):
+            pts_l = []
+            pts_r = []
+            px_l = self.center_x - 12 + random.uniform(-6, 6)
+            px_r = self.center_x + 12 + random.uniform(-6, 6)
+            py = self.center_y + 20
+            
+            pts_l.append((px_l, py))
+            pts_r.append((px_r, py))
+            
+            for _ in range(10):
+                py += random.uniform(12, 20)
+                px_l += random.uniform(-4, 4)
+                px_r += random.uniform(-4, 4)
+                pts_l.append((px_l, py))
+                pts_r.append((px_r, py))
+                
+            self.fibers.append({"type": "giant", "points": pts_l})
+            self.fibers.append({"type": "giant", "points": pts_r})
+
     def spawn_particles(self, src_key, dst_key, color, count=1, speed=3.0, size=2, tail=False):
         src = self.nodes[src_key]
         dst = self.nodes[dst_key]
         for _ in range(count):
-            offset_x = random.uniform(-20, 20)
-            offset_y = random.uniform(-20, 20)
+            offset_x = random.uniform(-30, 30)
+            offset_y = random.uniform(-30, 30)
             start_pos = (src[0] + offset_x, src[1] + offset_y)
             self.particles.append(Particle(start_pos, dst, color, speed, size, tail))
             
     def spawn_descending_wave(self):
-        # Spawn particles specifically for the descending twin tracts
-        self.particles.append(Particle(self.gf_l_start, self.gf_l_end, (200, 255, 255), speed=18.0, size=4, tail=True))
-        self.particles.append(Particle(self.gf_r_start, self.gf_r_end, (200, 255, 255), speed=18.0, size=4, tail=True))
+        # High-velocity shockwave cascade
+        for _ in range(8):
+            offset_x = random.uniform(-5, 5)
+            start_l = (self.gf_l_start[0] + offset_x, self.gf_l_start[1])
+            start_r = (self.gf_r_start[0] + offset_x, self.gf_r_start[1])
+            end_l = (self.gf_l_end[0] + offset_x, self.gf_l_end[1])
+            end_r = (self.gf_r_end[0] + offset_x, self.gf_r_end[1])
+            self.particles.append(Particle(start_l, end_l, (200, 255, 255), speed=20.0, size=4, tail=True))
+            self.particles.append(Particle(start_r, end_r, (200, 255, 255), speed=20.0, size=4, tail=True))
 
     def update_and_draw(self, surface, inputs, gf_v, spiked):
-        """
-        inputs: [looming, gap_offset, vel, ground]
-        """
-        # Parse inputs
         looming = inputs[0]
         gap_offset = inputs[1]
         vel = inputs[2]
         ground = inputs[3]
         
-        lpi_act = max(0.0, -gap_offset) # Dorsal Inhibitory
-        lplc2_act = max(0.0, gap_offset) + looming + ground # Ventral Excitatory
-        haltere_act = min(1.0, abs(vel))
+        lpi_act = max(0.0, -gap_offset)
+        lplc2_act = max(0.0, gap_offset) + looming + ground
         
-        # Colors based on requested spec
-        cyan_base = hex_to_rgb("#006688")
-        cyan_glow = hex_to_rgb("#00FFFF")
-        red_color = hex_to_rgb("#FF3355")
-        amber_color = hex_to_rgb("#FF9900")
-        magenta_color = hex_to_rgb("#CC00FF")
+        # Dynamic glow calculations
+        v_rest = -70.0
+        v_thresh = -50.0 
+        gf_fill = np.clip((gf_v - v_rest) / (v_thresh - v_rest), 0.0, 1.0)
         
-        # Spawn sensory particles
+        cyan_base = (0, 85, 119) # #005577
+        cyan_glow = (0, 255, 255) # #00FFFF
+        amber_base = (119, 68, 0) # #774400
+        amber_glow = (255, 204, 0) # #FFCC00
+        crimson_base = (100, 20, 30)
+        crimson_glow = (255, 51, 85) # #FF3355
+        magenta_color = (204, 0, 255) # #CC00FF
+        
+        # Additive blend surfaces
+        brain_surf = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
+        glow_surf = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
+        
+        # Silhouette
+        capsule_color = hex_to_rgb("#0D1B2A")
+        
+        center_x_local = self.rect.width // 2
+        center_y_local = self.rect.height // 2 - 50
+        
+        # Central brain mass
+        pygame.draw.ellipse(brain_surf, (*capsule_color, 89), (center_x_local - 80, center_y_local - 100, 160, 200))
+        # Left optic lobe
+        pygame.draw.ellipse(brain_surf, (*capsule_color, 89), (center_x_local - 180, center_y_local - 70, 140, 140))
+        # Right optic lobe
+        pygame.draw.ellipse(brain_surf, (*capsule_color, 89), (center_x_local + 40, center_y_local - 70, 140, 140))
+        
+        # Background structural fibers
+        for f in self.fibers:
+            pts = [(int(p[0] - self.rect.x), int(p[1] - self.rect.y)) for p in f["points"]]
+            if len(pts) > 1:
+                pygame.draw.lines(brain_surf, (13, 27, 42, 100), False, pts, 1)
+
+        # Dynamic active foreground fibers
+        for f in self.fibers:
+            pts = [(int(p[0] - self.rect.x), int(p[1] - self.rect.y)) for p in f["points"]]
+            if len(pts) < 2: continue
+            
+            if f["type"] in ("optic_l", "optic_r"):
+                # Interpolate cyan
+                glow_int = min(1.0, lplc2_act)
+                r = int(cyan_base[0] + (cyan_glow[0] - cyan_base[0]) * glow_int)
+                g = int(cyan_base[1] + (cyan_glow[1] - cyan_base[1]) * glow_int)
+                b = int(cyan_base[2] + (cyan_glow[2] - cyan_base[2]) * glow_int)
+                pygame.draw.lines(glow_surf, (r, g, b, 150), False, pts, 1)
+            elif f["type"] == "central":
+                glow_int = gf_fill
+                r = int(amber_base[0] + (amber_glow[0] - amber_base[0]) * glow_int)
+                g = int(amber_base[1] + (amber_glow[1] - amber_base[1]) * glow_int)
+                b = int(amber_base[2] + (amber_glow[2] - amber_base[2]) * glow_int)
+                pygame.draw.lines(glow_surf, (r, g, b, 180), False, pts, 1)
+            elif f["type"] == "antennal":
+                pygame.draw.lines(glow_surf, (80, 100, 120, 100), False, pts, 1)
+            elif f["type"] == "mushroom":
+                glow_int = min(1.0, lpi_act)
+                r = int(crimson_base[0] + (crimson_glow[0] - crimson_base[0]) * glow_int)
+                g = int(crimson_base[1] + (crimson_glow[1] - crimson_base[1]) * glow_int)
+                b = int(crimson_base[2] + (crimson_glow[2] - crimson_base[2]) * glow_int)
+                pygame.draw.lines(glow_surf, (r, g, b, 150), False, pts, 1)
+            elif f["type"] == "giant":
+                pygame.draw.lines(glow_surf, (*magenta_color, 120), False, pts, 1)
+
+        # Spawns sparks
         if random.random() < lpi_act * 0.5:
-            self.spawn_particles("lpi_l", "central_complex", red_color, speed=5.0)
-            self.spawn_particles("lpi_r", "central_complex", red_color, speed=5.0)
+            self.spawn_particles("lpi_l", "central_complex", crimson_glow, speed=6.0)
+            self.spawn_particles("lpi_r", "central_complex", crimson_glow, speed=6.0)
             
         if random.random() < lplc2_act * 0.6:
-            self.spawn_particles("lplc2_l", "central_complex", cyan_glow, speed=5.0)
-            self.spawn_particles("lplc2_r", "central_complex", cyan_glow, speed=5.0)
+            self.spawn_particles("lplc2_l", "central_complex", cyan_glow, speed=6.0)
+            self.spawn_particles("lplc2_r", "central_complex", cyan_glow, speed=6.0)
             
         if spiked:
             self.gf_flash_alpha = 255
             self.mn_flash_alpha = 255
             self.spawn_descending_wave()
             
-        # Decay flashes
-        self.gf_flash_alpha = max(0, self.gf_flash_alpha - 15)
-        self.mn_flash_alpha = max(0, self.mn_flash_alpha - 15)
+        self.gf_flash_alpha = max(0, self.gf_flash_alpha - 12)
+        self.mn_flash_alpha = max(0, self.mn_flash_alpha - 12)
         
-        # --- DRAW ANATOMICAL SILHOUETTE ---
-        # Draw translucent outer neuropil shell (Navy Blue: #071120)
-        capsule_color = hex_to_rgb("#071120")
-        cap_surf = pygame.Surface((400, 300), pygame.SRCALPHA)
-        
-        # Draw actual contour of insect brain (broad lateral lobes tapering inward)
-        # We can approximate this using a polygon or multiple overlapping ellipses
-        center_pt = (200, 150)
-        
-        # Central brain mass
-        pygame.draw.ellipse(cap_surf, (*capsule_color, 89), (120, 50, 160, 200)) # 35% alpha approx 89
-        # Left optic lobe
-        pygame.draw.ellipse(cap_surf, (*capsule_color, 89), (20, 80, 140, 140))
-        # Right optic lobe
-        pygame.draw.ellipse(cap_surf, (*capsule_color, 89), (240, 80, 140, 140))
-        
-        # Outline (Central)
-        pygame.draw.ellipse(cap_surf, (*capsule_color, 255), (120, 50, 160, 200), 2)
-        # Outline (Lobes)
-        pygame.draw.ellipse(cap_surf, (*capsule_color, 255), (20, 80, 140, 140), 2)
-        pygame.draw.ellipse(cap_surf, (*capsule_color, 255), (240, 80, 140, 140), 2)
-        
-        surface.blit(cap_surf, (self.center_x - 200, self.center_y - 150))
-        
-        # --- DRAW FIBER TRACTS ---
-        # Connections from LPi to Center (Dorsal Inhibitory Tracts)
-        # Arching upper neural filaments
-        for i in range(8):
-            offset_y = random.uniform(-10, 5)
-            pygame.draw.line(surface, (*red_color, 150), 
-                             (int(self.nodes["lpi_l"][0]), int(self.nodes["lpi_l"][1] + offset_y)), 
-                             (int(self.nodes["central_complex"][0]), int(self.nodes["central_complex"][1])), 1)
-            pygame.draw.line(surface, (*red_color, 150), 
-                             (int(self.nodes["lpi_r"][0]), int(self.nodes["lpi_r"][1] + offset_y)), 
-                             (int(self.nodes["central_complex"][0]), int(self.nodes["central_complex"][1])), 1)
-        
-        # Connections from LPLC2 to Center
-        for i in range(12):
-            offset_y = random.uniform(-15, 15)
-            pygame.draw.line(surface, (*cyan_base, 100), 
-                             (int(self.nodes["lplc2_l"][0]), int(self.nodes["lplc2_l"][1] + offset_y)), 
-                             (int(self.nodes["central_complex"][0]), int(self.nodes["central_complex"][1])), 1)
-            pygame.draw.line(surface, (*cyan_base, 100), 
-                             (int(self.nodes["lplc2_r"][0]), int(self.nodes["lplc2_r"][1] + offset_y)), 
-                             (int(self.nodes["central_complex"][0]), int(self.nodes["central_complex"][1])), 1)
-        
-        # Twin Giant Fiber Descending Nerve Cords (Dense bundle of magenta/purple axon fibers)
-        gf_bundle_surf = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
-        for i in range(20):
-            offset_x = random.uniform(-6, 6)
-            curve_offset = random.uniform(-4, 4)
-            # Left bundle
-            l_start = (int(self.gf_l_start[0] + offset_x), int(self.gf_l_start[1]))
-            l_mid = (int(self.gf_l_start[0] + offset_x + curve_offset), int((self.gf_l_start[1] + self.gf_l_end[1]) // 2))
-            l_end = (int(self.gf_l_end[0] + offset_x), int(self.gf_l_end[1]))
-            pygame.draw.lines(gf_bundle_surf, (*magenta_color, 120), False, [l_start, l_mid, l_end], 1)
-            
-            # Right bundle
-            r_start = (int(self.gf_r_start[0] + offset_x), int(self.gf_r_start[1]))
-            r_mid = (int(self.gf_r_start[0] + offset_x - curve_offset), int((self.gf_r_start[1] + self.gf_r_end[1]) // 2))
-            r_end = (int(self.gf_r_end[0] + offset_x), int(self.gf_r_end[1]))
-            pygame.draw.lines(gf_bundle_surf, (*magenta_color, 120), False, [r_start, r_mid, r_end], 1)
-            
-        surface.blit(gf_bundle_surf, (0, 0), special_flags=pygame.BLEND_ADD)
-        
-        # Update and draw particles
+        # Central Complex Flash
+        if self.gf_flash_alpha > 0:
+            pygame.draw.circle(glow_surf, (150, 255, 255, int(self.gf_flash_alpha * 0.7)), (center_x_local, center_y_local), 60)
+            pygame.draw.circle(glow_surf, (255, 255, 255, self.gf_flash_alpha), (center_x_local, center_y_local), 30)
+
+        # Thoracic Motor Ganglion Flash
+        mn_pos_local = (int(self.nodes["mn"][0] - self.rect.x), int(self.nodes["mn"][1] - self.rect.y))
+        if self.mn_flash_alpha > 0:
+            pygame.draw.circle(glow_surf, (0, 255, 0, int(self.mn_flash_alpha * 0.7)), mn_pos_local, 40)
+            pygame.draw.circle(glow_surf, (100, 255, 100, self.mn_flash_alpha), mn_pos_local, 15)
+
+        # Draw particles
         for p in self.particles[:]:
             p.update()
-            p.draw(surface)
-            if not p.active:
+            if p.active:
+                p_local = (int(p.x - self.rect.x), int(p.y - self.rect.y))
+                pygame.draw.circle(glow_surf, p.color, p_local, p.size)
+                if p.tail:
+                    tail_pos = (int(p_local[0] - p.vx * 3), int(p_local[1] - p.vy * 3))
+                    pygame.draw.line(glow_surf, p.color, tail_pos, p_local, p.size)
+            else:
                 self.particles.remove(p)
-                
-        # --- DRAW DENDRITIC CLUSTERS / LOBES ---
-        def draw_lobe(pos, base_color, glow_color, intensity, radius, label, num_branches=40):
-            glow_alpha = min(255, int(intensity * 255))
-            if glow_alpha > 0:
-                glow_surf = pygame.Surface((radius*4, radius*4), pygame.SRCALPHA)
-                pygame.draw.circle(glow_surf, (*glow_color, int(glow_alpha*0.15)), (radius*2, radius*2), radius*2)
-                pygame.draw.circle(glow_surf, (*glow_color, int(glow_alpha*0.3)), (radius*2, radius*2), radius)
-                surface.blit(glow_surf, (pos[0]-radius*2, pos[1]-radius*2), special_flags=pygame.BLEND_ADD)
-                
-            # Draw dense network of branching filaments
-            filament_surf = pygame.Surface((radius*4, radius*4), pygame.SRCALPHA)
-            for i in range(num_branches):
-                angle = (i / num_branches) * math.pi * 2 + (intensity * 1.5) + random.uniform(-0.1, 0.1)
-                branch_len = radius * random.uniform(0.5, 1.5) * (1.0 + intensity * 0.3)
-                start_x, start_y = radius*2, radius*2
-                end_x = start_x + math.cos(angle) * branch_len
-                end_y = start_y + math.sin(angle) * branch_len
-                
-                # Draw main filament
-                pygame.draw.line(filament_surf, (*base_color, 180), (int(start_x), int(start_y)), (int(end_x), int(end_y)), 2)
-                # Draw sub-branch
-                if i % 3 == 0:
-                    sub_angle = angle + random.uniform(-0.5, 0.5)
-                    sub_len = branch_len * 0.5
-                    sub_end_x = end_x + math.cos(sub_angle) * sub_len
-                    sub_end_y = end_y + math.sin(sub_angle) * sub_len
-                    pygame.draw.line(filament_surf, (*glow_color, int(glow_alpha*0.6)), (int(end_x), int(end_y)), (int(sub_end_x), int(sub_end_y)), 1)
-            
-            surface.blit(filament_surf, (pos[0]-radius*2, pos[1]-radius*2), special_flags=pygame.BLEND_ADD)
-            
-            label_surf = self.font.render(label, True, COLOR_TEXT)
-            surface.blit(label_surf, (pos[0] - label_surf.get_width()//2, pos[1] + radius + 15))
-            
-        # Draw LPi (Dorsal Inhibitory)
-        draw_lobe(self.nodes["lpi_l"], (100, 0, 0), red_color, lpi_act, 15, "LPi (L)")
-        draw_lobe(self.nodes["lpi_r"], (100, 0, 0), red_color, lpi_act, 15, "LPi (R)")
+
+        # Blit layers
+        surface.blit(brain_surf, (self.rect.x, self.rect.y))
+        surface.blit(glow_surf, (self.rect.x, self.rect.y), special_flags=pygame.BLEND_ADD)
         
-        # Draw LPLC2 (Lateral Optic Lobes)
-        draw_lobe(self.nodes["lplc2_l"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (L)", num_branches=40)
-        draw_lobe(self.nodes["lplc2_r"], cyan_base, cyan_glow, lplc2_act, 25, "LPLC2 / Lobula (R)", num_branches=40)
+        # Labels
+        cc_label = self.font.render("Central Complex", True, COLOR_TEXT)
+        surface.blit(cc_label, (self.nodes["central_complex"][0] - cc_label.get_width()//2, self.nodes["central_complex"][1] - 80))
         
-        # --- DRAW CENTRAL COMPLEX (Ellipsoid Body) ---
-        cc_pos = self.nodes["central_complex"]
-        
-        # Vm ranges from ~ -70 to -50 for visual scaling
-        v_rest = -70.0
-        v_thresh = -50.0 
-        gf_fill = np.clip((gf_v - v_rest) / (v_thresh - v_rest), 0.0, 1.0)
-        
-        # Core brightness dynamically scales with Giant Fiber membrane potential (dim amber to blinding gold)
-        core_color = (
-            min(255, int(amber_color[0] + gf_fill * (255 - amber_color[0]))),
-            min(255, int(amber_color[1] + gf_fill * (255 - amber_color[1]))),
-            min(255, int(amber_color[2] + gf_fill * (255 - amber_color[2])))
-        )
-        
-        # Outer soft glow
-        cc_glow = pygame.Surface((140, 140), pygame.SRCALPHA)
-        pygame.draw.circle(cc_glow, (*amber_color, int(gf_fill * 80)), (70, 70), 50)
-        surface.blit(cc_glow, (cc_pos[0]-70, cc_pos[1]-70), special_flags=pygame.BLEND_ADD)
-        
-        # Draw toroidal fiber loops (Mushroom Body / Central Complex)
-        loop_surf = pygame.Surface((100, 100), pygame.SRCALPHA)
-        num_loops = 36
-        for i in range(num_loops):
-            angle = (i / num_loops) * math.pi * 2
-            r1 = 15
-            r2 = 35 + gf_fill * 10
-            x1 = 50 + math.cos(angle) * r1
-            y1 = 50 + math.sin(angle) * r1
-            x2 = 50 + math.cos(angle + 0.3) * r2
-            y2 = 50 + math.sin(angle + 0.3) * r2
-            pygame.draw.line(loop_surf, (*amber_color, 120), (int(x1), int(y1)), (int(x2), int(y2)), 2)
-            pygame.draw.line(loop_surf, (*core_color, 200), (int(x2), int(y2)), (int(50 + math.cos(angle+0.6)*r1), int(50 + math.sin(angle+0.6)*r1)), 1)
-        
-        surface.blit(loop_surf, (cc_pos[0]-50, cc_pos[1]-50), special_flags=pygame.BLEND_ADD)
-        
-        # Central Complex Label
-        hal_surf = self.font.render("Central Complex", True, COLOR_TEXT)
-        surface.blit(hal_surf, (cc_pos[0] - hal_surf.get_width()//2, cc_pos[1] - 50))
-        
-        # Spike Flash (White/Cyan Blast on Central Complex)
-        if self.gf_flash_alpha > 0:
-            flash_surf = pygame.Surface((160, 160), pygame.SRCALPHA)
-            pygame.draw.circle(flash_surf, (150, 255, 255, self.gf_flash_alpha), (80, 80), 60)
-            pygame.draw.circle(flash_surf, (255, 255, 255, self.gf_flash_alpha), (80, 80), 30)
-            surface.blit(flash_surf, (cc_pos[0]-80, cc_pos[1]-80), special_flags=pygame.BLEND_ADD)
-            
-        # --- DRAW THORACIC MOTOR GANGLION ---
-        mn_pos = self.nodes["mn"]
-        pygame.draw.circle(surface, (20, 30, 40), mn_pos, 25)
-        pygame.draw.circle(surface, hex_to_rgb("#00FF00") if self.mn_flash_alpha > 0 else (0, 100, 0), mn_pos, 25, 3)
-        
-        if self.mn_flash_alpha > 0:
-            mn_glow = pygame.Surface((100, 100), pygame.SRCALPHA)
-            pygame.draw.circle(mn_glow, (*hex_to_rgb("#00FF00"), self.mn_flash_alpha), (50, 50), 35)
-            surface.blit(mn_glow, (mn_pos[0]-50, mn_pos[1]-50), special_flags=pygame.BLEND_ADD)
-            
         mn_label = self.font.render("Thoracic Motor Ganglion", True, COLOR_TEXT)
-        surface.blit(mn_label, (mn_pos[0] - mn_label.get_width()//2, mn_pos[1] + 30))
+        surface.blit(mn_label, (self.nodes["mn"][0] - mn_label.get_width()//2, self.nodes["mn"][1] + 20))

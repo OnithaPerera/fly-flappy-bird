@@ -6,6 +6,7 @@ import pygame
 import numpy as np
 import random
 import time
+import math
 
 from diagnostics import run_preflight_checks, validate_frame_tensor
 run_preflight_checks() 
@@ -352,26 +353,88 @@ def run_simulation():
         else:
             s1, s2 = 0, 0
             
-        y_coords = [20, 50, 80, 110, 140, 170]
-        texts = [
-            mode_text,
-            f"ALIVE: {alive_count} / {len(world.agents)}",
-            f"SCORE 101: {s1} | SCORE 202: {s2}",
-            f"ALL-TIME RECORD: {int(all_time_record)}",
-            f"MUT RATE: {mut_rate:.3f} | SCALE: {mut_scale:.3f}",
-            f"SIM SPEED: {speed_multiplier}X {'(PAUSED)' if paused else ''}"
-        ]
+        # Collect Telemetry Data
+        v_current = float(batched_snn.gf_v[leader_idx, 0]) if leader_idx != -1 else -70.0
+        v_thresh_val = float(batched_snn.v_thresh[leader_idx, 0]) if leader_idx != -1 else -50.0
         
-        for i, t in enumerate(texts):
-            color = COLOR_LEADER if replay_mode and i == 0 else (COLOR_PHOSPHOR if i == 0 else COLOR_TEXT)
-            surf = font.render(t, True, color)
-            virtual_screen.blit(surf, (hud_x + 10, y_coords[i]))
+        spike_rate = 0.0
+        syn_drive = 0.0
+        vy = 0.0
+        tilt = 0.0
+        gap_delta = 0.0
+        obs_dist = 0.0
+        
+        if leader and leader_idx != -1:
+            recent_flaps = leader.action_tape[-60:] if len(leader.action_tape) > 0 else []
+            if len(recent_flaps) > 0:
+                spike_rate = (sum(recent_flaps) / float(len(recent_flaps))) * FPS
+                
+            looming = inputs[leader_idx, 0]
+            gap_offset = inputs[leader_idx, 1]
+            ground_val = inputs[leader_idx, 3]
+            lpi_act = max(0.0, -gap_offset)
+            lplc2_act = max(0.0, gap_offset) + looming + ground_val
+            syn_drive = lplc2_act - lpi_act + ground_val
             
+            vy = leader.velocity
+            tilt = max(-45.0, min(30.0, -math.degrees(math.atan2(vy, 10))))
+            
+            closest_pipe = next((p for p in world.pipes if p.x + p.width > leader.x), None)
+            if closest_pipe:
+                gap_delta = leader.y - closest_pipe.gap_y
+                obs_dist = max(0.0, closest_pipe.x - leader.x)
+                
+        gen_div = float(np.var(batched_snn.genomes, axis=0).mean()) if not replay_mode else 0.0
+
+        # Draw Cards
+        card_w = 320
+        def draw_card(title, lines, x, y):
+            pygame.draw.rect(virtual_screen, (17, 34, 51), (x, y, card_w, 35 + len(lines)*20), 0, 4)
+            pygame.draw.rect(virtual_screen, (0, 102, 136), (x, y, card_w, 35 + len(lines)*20), 1, 4)
+            header = font.render(title, True, (0, 255, 255))
+            virtual_screen.blit(header, (x + 10, y + 8))
+            for idx, (k, v) in enumerate(lines):
+                key_surf = font.render(k, True, COLOR_TEXT)
+                val_surf = font.render(v, True, COLOR_PHOSPHOR)
+                virtual_screen.blit(key_surf, (x + 10, y + 30 + idx*20))
+                virtual_screen.blit(val_surf, (x + card_w - val_surf.get_width() - 10, y + 30 + idx*20))
+                
+        # 1. Biophysical Telemetry
+        draw_card("BIOPHYSICAL TELEMETRY", [
+            ("MEMBRANE (Vm):", f"{v_current:.1f} mV"),
+            ("THRESHOLD (Vth):", f"{v_thresh_val:.1f} mV"),
+            ("SPIKE RATE:", f"{spike_rate:.1f} Hz"),
+            ("SYNAPTIC DRIVE:", f"{syn_drive:.2f} Inet")
+        ], hud_x + 10, 20)
+        
+        # 2. Kinematic & Sensorimotor
+        vy_dir = "▲ climbing" if vy < 0 else "▼ falling"
+        draw_card("KINEMATIC & SENSORIMOTOR", [
+            ("VERTICAL VELOCITY (Vy):", f"{abs(vy):.1f} px/f {vy_dir}"),
+            ("ATTITUDE TILT:", f"{tilt:.1f}°"),
+            ("GAP OFFSET (Δy):", f"{gap_delta:.1f} px"),
+            ("OBSTACLE DISTANCE:", f"{obs_dist:.1f} px")
+        ], hud_x + 10, 150)
+        
+        # 3. Evolutionary Population Health
+        draw_card("EVOLUTIONARY POPULATION HEALTH", [
+            ("GENOME DIVERSITY:", f"σ² = {gen_div:.4f}"),
+            ("SEED A / SEED B SCORES:", f"{s1} / {s2}"),
+            ("SWARM SURVIVAL:", f"Alive: {alive_count} / {len(world.agents)}")
+        ], hud_x + 10, 280)
+        
+        # Mode Text & Speed
+        m_color = COLOR_LEADER if replay_mode else COLOR_TEXT
+        m_surf = font.render(mode_text, True, m_color)
+        virtual_screen.blit(m_surf, (hud_x + 10, 390))
+        sp_surf = font.render(f"SIM SPEED: {speed_multiplier}X {'(PAUSED)' if paused else ''}", True, COLOR_TEXT)
+        virtual_screen.blit(sp_surf, (hud_x + 10, 410))
+        
         # Fitness Graph (Right Deck)
         g_label = font.render("MULTI-SEED FITNESS HISTORY", True, COLOR_TEXT)
-        virtual_screen.blit(g_label, (hud_x + 10, 220))
+        virtual_screen.blit(g_label, (hud_x + 10, 440))
         
-        graph_rect = pygame.Rect(hud_x + 10, 245, 300, 100)
+        graph_rect = pygame.Rect(hud_x + 10, 460, 300, 100)
         pygame.draw.rect(virtual_screen, (0, 0, 0), graph_rect)
         pygame.draw.rect(virtual_screen, COLOR_GRID, graph_rect, 1)
         
@@ -390,17 +453,17 @@ def run_simulation():
             
         # Leader Brain View (Right Deck)
         lb_label = font.render("COMPOUND EYE (8x8 BINARY)", True, COLOR_TEXT)
-        virtual_screen.blit(lb_label, (hud_x + 10, 370))
+        virtual_screen.blit(lb_label, (hud_x + 10, 580))
         
         if leader:
             heatmap_rgb = get_colored_heatmap(disp_matrix)
             eye_surf = pygame.surfarray.make_surface(heatmap_rgb)
             eye_surf = pygame.transform.scale(eye_surf, (128, 128))
-            virtual_screen.blit(eye_surf, (hud_x + 10, 395))
+            virtual_screen.blit(eye_surf, (hud_x + 10, 600))
             
         # Hotkeys (Right Deck)
         keys_label = font.render("HOTKEYS:", True, COLOR_ACCENT)
-        virtual_screen.blit(keys_label, (hud_x + 10, 560))
+        virtual_screen.blit(keys_label, (hud_x + 10, 750))
         hotkeys = [
             "[P] Pause/Unpause",
             "[R] Toggle Replay Champion",
@@ -409,7 +472,7 @@ def run_simulation():
         ]
         for i, hk in enumerate(hotkeys):
             surf = font.render(hk, True, COLOR_TEXT)
-            virtual_screen.blit(surf, (hud_x + 10, 585 + i*25))
+            virtual_screen.blit(surf, (hud_x + 10, 770 + i*20))
             
         # Giant Fiber Oscilloscope (Center Deck - Bottom)
         osc_label = font.render("GIANT FIBER VOLTAGE (Vm)", True, COLOR_TEXT)
