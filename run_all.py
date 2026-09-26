@@ -6,10 +6,11 @@ import socketserver
 import threading
 import webbrowser
 
+import functools
+
 def serve_web():
-    web_dir = os.path.join(os.path.dirname(__file__), "web_visualizer")
-    os.chdir(web_dir)
-    handler = http.server.SimpleHTTPRequestHandler
+    web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_visualizer")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=web_dir)
     with socketserver.TCPServer(("", 8080), handler) as httpd:
         print("Serving Three.js visualizer at http://localhost:8080")
         httpd.serve_forever()
