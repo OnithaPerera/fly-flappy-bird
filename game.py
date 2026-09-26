@@ -17,7 +17,7 @@ class FlyAgent:
         self.death_frame = -1
         
         # Fitness tracking
-        self.score = 0
+        self.score = 0.0
         self.frames_survived = 0
         self.ceiling_hits = 0
         self.gap_alignment_reward = 0.0
@@ -56,6 +56,7 @@ class FlyAgent:
         self.y += self.velocity
         self.rect.y = int(self.y - 10)
         self.frames_survived += 1
+        self.score += PIPE_SPEED
         
         if self.flap_timer > 0:
             self.flap_timer -= 1
@@ -71,7 +72,8 @@ class FlyAgent:
             self.lethal_penalty += 300.0
 
     def get_fitness(self):
-        return self.frames_survived + (self.score * 1500) + self.gap_alignment_reward + self.smoothness_reward - self.oscillation_penalty - self.lethal_penalty
+        # 1500 / 320 (PIPE_SPACING) = 4.6875 to maintain identical GA selection pressure
+        return self.frames_survived + (self.score * 4.6875) + self.gap_alignment_reward + self.smoothness_reward - self.oscillation_penalty - self.lethal_penalty
 
     def draw(self, surface, assets, is_leader=False):
         if not self.alive: return
@@ -220,9 +222,6 @@ class SwarmWorld:
                 first_alive = next((a for a in self.agents if a.alive), None)
                 if first_alive and pipe.x + pipe.width < first_alive.x:
                     pipe.passed = True
-                    for agent in self.agents:
-                        if agent.alive:
-                            agent.score += 1
                 
         self.pipes = [p for p in self.pipes if p.x + p.width > 0]
         

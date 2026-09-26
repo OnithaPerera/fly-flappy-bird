@@ -140,6 +140,10 @@ class LobulaColumnarSNN:
         spikes = (self.gf_v >= self.v_thresh) & active_mask[:, None]
         spiked_indices = np.where(spikes[:, 0])[0]
         
+        # Overwrite the recorded history for spiked neurons to simulate an AP peak
+        if len(spiked_indices) > 0:
+            self.voltage_history[-1][spiked_indices, 0] = 20.0  # +20 mV peak
+            
         self.gf_v[spiked_indices] = V_RESET
         self.refractory_timer[spiked_indices] = REFRACTORY_FRAMES
         

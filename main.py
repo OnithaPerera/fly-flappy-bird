@@ -82,7 +82,7 @@ def run_simulation():
     generation = 1
     max_fitness_history = []
     all_time_record = 0
-    all_time_high_pipes = 0
+    all_time_high_dist = 0
     all_time_record_seed = current_seed
     all_time_action_tape = set()
     best_overall_genome = None
@@ -307,8 +307,8 @@ def run_simulation():
                     
                 world.step(flaps)
                 
-                if leader_idx != -1:
-                    spike_history.append(bool(flaps[leader_idx]))
+                # Track total population spikes for biological firing rate
+                spike_history.append(np.sum(flaps))
                 
                 if flaps[leader_idx] if leader_idx != -1 else False:
                     sound_fx.play_spike_click()
@@ -371,9 +371,10 @@ def run_simulation():
         gap_delta = 0.0
         obs_dist = 0.0
         
-        if len(spike_history) > 0:
-            spike_rate_hz = (sum(spike_history) / len(spike_history)) * 60.0
-            spike_rate = max(0.0, min(25.0, spike_rate_hz))
+        if len(spike_history) > 0 and len(world.agents) > 0:
+            neuron_count = len(world.agents)
+            dt_window = len(spike_history) / 60.0
+            spike_rate = sum(spike_history) / (neuron_count * dt_window)
             
         if leader and leader_idx != -1:
             looming = inputs[leader_idx, 0]
@@ -425,21 +426,21 @@ def run_simulation():
             
         curr_y = 20
         
-        current_pipes_cleared = leader.score if leader else 0
-        all_time_high_pipes = max(all_time_high_pipes, current_pipes_cleared)
+        current_dist = leader.score if leader else 0
+        all_time_high_dist = max(all_time_high_dist, current_dist)
         
         # 1. SCORE & PROGRESSION
         score_h = 125
         draw_card_bg("SCORE & PROGRESSION", score_h, hud_x + 10, curr_y)
         
-        lbl1 = font.render("CURRENT PIPES CLEARED", True, COLOR_TEXT)
+        lbl1 = font.render("DISTANCE TRAVELLED", True, COLOR_TEXT)
         virtual_screen.blit(lbl1, (hud_x + 20, curr_y + 28))
-        val1 = huge_font.render(f"{int(current_pipes_cleared)}", True, (0, 255, 255))
+        val1 = huge_font.render(f"{int(current_dist)}", True, (0, 255, 255))
         virtual_screen.blit(val1, (hud_x + 20, curr_y + 43))
         
         lbl2 = font.render("HIGH SCORE RECORD", True, COLOR_TEXT)
         virtual_screen.blit(lbl2, (hud_x + 20, curr_y + 82))
-        val2 = huge_font.render(f"{int(all_time_high_pipes)}", True, (255, 204, 0))
+        val2 = huge_font.render(f"{int(all_time_high_dist)}", True, (255, 204, 0))
         virtual_screen.blit(val2, (hud_x + 20, curr_y + 97))
         
         surv_lbl = font.render("SWARM SURVIVAL:", True, COLOR_TEXT)
@@ -506,14 +507,46 @@ def run_simulation():
         curr_y += 105
         
         # Leader Brain View (Right Deck)
-        lb_label = font.render("COMPOUND EYE (8x8 BINARY)", True, COLOR_TEXT)
+        lb_label = font.render("COMPOUND EYE (HEX LATTICE)", True, COLOR_TEXT)
         virtual_screen.blit(lb_label, (hud_x + 10, curr_y))
         
         if leader:
-            heatmap_rgb = get_colored_heatmap(disp_matrix)
-            eye_surf = pygame.surfarray.make_surface(heatmap_rgb)
-            eye_surf = pygame.transform.scale(eye_surf, (128, 128))
-            virtual_screen.blit(eye_surf, (hud_x + 10, curr_y + 20))
+            hex_radius = 8.0
+            hex_w = math.sqrt(3) * hex_radius
+            hex_h = 2 * hex_radius
+            
+            center_x = hud_x + 10 + 64
+            center_y = curr_y + 20 + 64
+            
+            for row in range(8):
+                for col in range(8):
+                    val = disp_matrix[row, col] / 255.0
+                    
+                    x_offset = (col - 3.5) * hex_w
+                    if row % 2 == 1:
+                        x_offset += hex_w / 2
+                    y_offset = (row - 3.5) * (hex_h * 0.75)
+                    
+                    dist = math.hypot(x_offset, y_offset)
+                    curve_scale = 1.0 + (dist / 64.0) * 0.2
+                    
+                    hx = center_x + x_offset * curve_scale
+                    hy = center_y + y_offset * curve_scale
+                    
+                    # Heatmap colors: from dark blue (0) to teal (0.5) to bright yellow (1.0)
+                    if val < 0.5:
+                        c_r, c_g, c_b = int(0), int(100 * (val*2)), int(100 + 155 * (val*2))
+                    else:
+                        c_r, c_g, c_b = int(255 * ((val-0.5)*2)), int(200 + 55 * ((val-0.5)*2)), int(255 - 255 * ((val-0.5)*2))
+                    
+                    pts = []
+                    hr = hex_radius * curve_scale * 0.95
+                    for i in range(6):
+                        angle = math.radians(60 * i - 30)
+                        pts.append((hx + hr * math.cos(angle), hy + hr * math.sin(angle)))
+                    
+                    pygame.draw.polygon(virtual_screen, (c_r, c_g, c_b), pts)
+                    pygame.draw.polygon(virtual_screen, (10, 20, 30), pts, 1)
             
         # Hotkeys (Right Deck)
         keys_label = font.render("HOTKEYS:", True, COLOR_ACCENT)
@@ -538,7 +571,7 @@ def run_simulation():
         
         if leader:
             hist = [float(v[0, 0]) for v in batched_snn.voltage_history[-260:]] if replay_mode else [float(v[leader_idx, 0]) for v in batched_snn.voltage_history[-260:]]
-            min_v, max_v = -80.0, -40.0
+            min_v, max_v = -85.0, 30.0
             v_range = max_v - min_v
             
             if len(hist) > 1:
