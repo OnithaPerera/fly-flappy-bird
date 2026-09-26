@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connectome Workbench</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050811; color: white; font-family: Consolas, monospace; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            background: rgba(8, 18, 32, 0.8);
+            border: 1px solid #162840;
+            padding: 15px;
+            border-radius: 4px;
+            width: 300px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        }
+        .hud-line { margin-bottom: 8px; font-size: 14px; display: flex; justify-content: space-between; }
+        .hud-val { color: #00FF66; }
+        .title { color: #00FFFF; font-size: 16px; font-weight: bold; margin-bottom: 15px; border-bottom: 1px solid #162840; padding-bottom: 5px; }
+        #status { position: absolute; bottom: 20px; right: 20px; font-size: 12px; color: #888; }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <div class="title">CONNECTOME TELEMETRY</div>
+        <div class="hud-line"><span>MEMBRANE (Vm):</span> <span class="hud-val" id="hud_vm">-70.0 mV</span></div>
+        <div class="hud-line"><span>THRESHOLD:</span> <span class="hud-val" id="hud_vthresh">-50.0 mV</span></div>
+        <div class="hud-line"><span>LOOMING DRIVE:</span> <span class="hud-val" id="hud_looming">0.00</span></div>
+        <div class="hud-line"><span>VELOCITY (Vy):</span> <span class="hud-val" id="hud_vy">0.0 px/f</span></div>
+        <div class="hud-line"><span>PIPES CLEARED:</span> <span class="hud-val" id="hud_score">0</span></div>
+    </div>
+    <div id="status">Connecting to Pygame Simulation...</div>
+    <div id="canvas-container"></div>
+
+    <!-- Import maps polyfill -->
+    <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // 1. Scene Setup
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050811, 0.005);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 0, 100);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setClearColor(0x050811, 1);
+        container.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+        scene.add(ambientLight);
+        
+        const rimLight1 = new THREE.DirectionalLight(0x00aaff, 1.5);
+        rimLight1.position.set(100, 50, -50);
+        scene.add(rimLight1);
+
+        const rimLight2 = new THREE.DirectionalLight(0xff00aa, 1.0);
+        rimLight2.position.set(-100, -50, 50);
+        scene.add(rimLight2);
+
+        // 2. Glass Neuropil Shell (Procedural Hull)
+        const hullGeo = new THREE.CapsuleGeometry(30, 20, 16, 32);
+        hullGeo.rotateZ(Math.PI / 2);
+        const hullMat = new THREE.MeshPhysicalMaterial({
+            color: 0x004488,
+            transparent: true,
+            opacity: 0.12,
+            roughness: 0.1,
+            metalness: 0.1,
+            transmission: 0.9,
+            thickness: 2.0,
+            side: THREE.DoubleSide,
+            depthWrite: false
+        });
+        const brainHull = new THREE.Mesh(hullGeo, hullMat);
+        scene.add(brainHull);
+
+        // 3. Post-Processing Pipeline
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.8, 0.6, 0.2);
+        
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // 4. Load Soma Point Cloud
+        let particles;
+        let baseColors = [];
+        let geometry = new THREE.BufferGeometry();
+        let pointCloudMaterial;
+        
+        // Base Palettes
+        const COLOR_OPTIC = new THREE.Color(0x008888); // Cyan/Teal (dimmed initially)
+        const COLOR_CENTRAL = new THREE.Color(0x664400); // Amber/Gold (dimmed)
+        const COLOR_MUSHROOM = new THREE.Color(0x660088); // Magenta/Purple
+        const COLOR_GIANT = new THREE.Color(0x006633); // Green
+
+        // Bright Palettes (Fired)
+        const BRIGHT_OPTIC = new THREE.Color(0x00FFFF);
+        const BRIGHT_CENTRAL = new THREE.Color(0xFFCC00);
+        const BRIGHT_GIANT = new THREE.Color(0x88FFCC);
+
+        fetch('soma_atlas.bin')
+            .then(res => res.arrayBuffer())
+            .then(buffer => {
+                const data = new Float32Array(buffer);
+                const count = data.length / 4;
+                
+                const positions = new Float32Array(count * 3);
+                const colors = new Float32Array(count * 3);
+                baseColors = new Float32Array(count * 3);
+                const regions = new Float32Array(count); // To identify regions in shader/logic
+
+                for (let i = 0; i < count; i++) {
+                    positions[i * 3] = data[i * 4];
+                    positions[i * 3 + 1] = data[i * 4 + 1];
+                    positions[i * 3 + 2] = data[i * 4 + 2];
+                    
+                    const region = data[i * 4 + 3];
+                    regions[i] = region;
+
+                    let c;
+                    if (region === 0.0) c = COLOR_OPTIC;
+                    else if (region === 1.0) c = COLOR_CENTRAL;
+                    else if (region === 2.0) c = COLOR_MUSHROOM;
+                    else c = COLOR_GIANT;
+
+                    colors[i * 3] = c.r;
+                    colors[i * 3 + 1] = c.g;
+                    colors[i * 3 + 2] = c.b;
+
+                    baseColors[i * 3] = c.r;
+                    baseColors[i * 3 + 1] = c.g;
+                    baseColors[i * 3 + 2] = c.b;
+                }
+
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                geometry.setAttribute('region', new THREE.BufferAttribute(regions, 1));
+
+                pointCloudMaterial = new THREE.PointsMaterial({
+                    size: 0.8,
+                    vertexColors: true,
+                    transparent: true,
+                    opacity: 0.8,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false
+                });
+
+                particles = new THREE.Points(geometry, pointCloudMaterial);
+                scene.add(particles);
+            });
+
+        // 5. Telemetry & Neural Activation Logic
+        let currentVm = -70.0;
+        let vThresh = -50.0;
+        let spikePulse = 0.0;
+        let loomingDrive = 0.0;
+
+        function connectWebSocket() {
+            const ws = new WebSocket('ws://localhost:8765');
+            const statusEl = document.getElementById('status');
+
+            ws.onopen = () => {
+                statusEl.innerText = "Connected to Simulation [ws://localhost:8765]";
+                statusEl.style.color = "#00FF66";
+            };
+
+            ws.onclose = () => {
+                statusEl.innerText = "Disconnected. Retrying in 2s...";
+                statusEl.style.color = "#FF3333";
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            ws.onerror = (e) => {
+                ws.close();
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                // Update HUD
+                document.getElementById('hud_vm').innerText = data.vm.toFixed(1) + " mV";
+                document.getElementById('hud_vthresh').innerText = data.v_thresh.toFixed(1) + " mV";
+                document.getElementById('hud_looming').innerText = data.looming_drive.toFixed(2);
+                document.getElementById('hud_vy').innerText = data.vy.toFixed(1) + " px/f";
+                document.getElementById('hud_score').innerText = Math.floor(data.score);
+
+                // Update Logic State
+                currentVm = data.vm;
+                vThresh = data.v_thresh;
+                loomingDrive = data.looming_drive;
+
+                if (data.spiked) {
+                    spikePulse = 1.0;
+                }
+            };
+        }
+        connectWebSocket();
+
+        // Animation Loop
+        const clock = new THREE.Clock();
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            const dt = clock.getDelta();
+
+            // Decay spike pulse
+            if (spikePulse > 0) {
+                spikePulse = Math.max(0, spikePulse - dt * 3.0); // Decay over 1/3 sec
+            }
+
+            if (particles && particles.geometry.attributes.color) {
+                const colors = particles.geometry.attributes.color.array;
+                const regions = particles.geometry.attributes.region.array;
+                
+                // Calculate vm relative intensity (0 to 1 as it approaches threshold)
+                // Rest is -70, Thresh is -50 typically.
+                const vmBase = -70.0;
+                let vmIntensity = Math.max(0, Math.min(1, (currentVm - vmBase) / (vThresh - vmBase + 0.1)));
+
+                for (let i = 0; i < regions.length; i++) {
+                    const r = regions[i];
+                    let outR = baseColors[i * 3];
+                    let outG = baseColors[i * 3 + 1];
+                    let outB = baseColors[i * 3 + 2];
+
+                    if (r === 0.0) {
+                        // Optic Lobe - modulated by looming
+                        const intensity = Math.min(1.0, loomingDrive * 1.5);
+                        outR = THREE.MathUtils.lerp(COLOR_OPTIC.r, BRIGHT_OPTIC.r, intensity);
+                        outG = THREE.MathUtils.lerp(COLOR_OPTIC.g, BRIGHT_OPTIC.g, intensity);
+                        outB = THREE.MathUtils.lerp(COLOR_OPTIC.b, BRIGHT_OPTIC.b, intensity);
+                    } else if (r === 1.0) {
+                        // Central Complex - modulated by vm
+                        // And detonate on spike
+                        const intensity = Math.max(vmIntensity, spikePulse);
+                        outR = THREE.MathUtils.lerp(COLOR_CENTRAL.r, BRIGHT_CENTRAL.r, intensity);
+                        outG = THREE.MathUtils.lerp(COLOR_CENTRAL.g, BRIGHT_CENTRAL.g, intensity);
+                        outB = THREE.MathUtils.lerp(COLOR_CENTRAL.b, BRIGHT_CENTRAL.b, intensity);
+                    } else if (r === 3.0) {
+                        // Giant Fiber - detonate on spike (shockwave)
+                        // Add some cascading delay based on y position (y goes from ~0 down to -30)
+                        const yPos = particles.geometry.attributes.position.array[i * 3 + 1];
+                        const wavePhase = Math.max(0, spikePulse - (Math.abs(yPos) / 30.0) * 0.5);
+                        
+                        outR = THREE.MathUtils.lerp(COLOR_GIANT.r, BRIGHT_GIANT.r, wavePhase);
+                        outG = THREE.MathUtils.lerp(COLOR_GIANT.g, BRIGHT_GIANT.g, wavePhase);
+                        outB = THREE.MathUtils.lerp(COLOR_GIANT.b, BRIGHT_GIANT.b, wavePhase);
+                    }
+
+                    colors[i * 3] = outR;
+                    colors[i * 3 + 1] = outG;
+                    colors[i * 3 + 2] = outB;
+                }
+                
+                particles.geometry.attributes.color.needsUpdate = true;
+                
+                // Boost global bloom when spiking
+                bloomPass.strength = 1.5 + (spikePulse * 2.0);
+            }
+
+            // Slight brain bob/rotation
+            const time = clock.getElapsedTime();
+            if (brainHull) {
+                brainHull.position.y = Math.sin(time * 0.5) * 2;
+                particles && (particles.position.y = brainHull.position.y);
+            }
+
+            composer.render();
+        }
+        
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
