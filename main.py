@@ -23,7 +23,6 @@ from connectome_lif import LobulaColumnarSNN
 from brain_visualizer import BrainVisualizer
 from assets_loader import load_or_fetch_assets
 import sound_fx
-from telemetry_server import server
 
 def generate_random_genome():
     genome = np.zeros(TOTAL_GENOME_SIZE, dtype=np.float32)
@@ -38,8 +37,6 @@ def generate_random_genome():
     return genome
 
 def run_simulation():
-    server.start()
-    
     pygame.init()
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.RESIZABLE)
     virtual_screen = pygame.Surface((CANVAS_WIDTH, CANVAS_HEIGHT))
@@ -85,6 +82,7 @@ def run_simulation():
     generation = 1
     max_fitness_history = []
     all_time_record = 0
+    all_time_high_pipes = 0
     all_time_record_seed = current_seed
     all_time_action_tape = set()
     best_overall_genome = None
@@ -311,17 +309,6 @@ def run_simulation():
                 
                 if leader_idx != -1:
                     spike_history.append(bool(flaps[leader_idx]))
-                    server.broadcast({
-                        "vm": float(batched_snn.gf_v[leader_idx, 0]),
-                        "v_thresh": float(batched_snn.v_thresh[leader_idx, 0]),
-                        "spiked": bool(flaps[leader_idx]),
-                        "vy": float(leader.velocity),
-                        "gap_offset": float(inputs[leader_idx, 1]),
-                        "score": float(leader.get_fitness()),
-                        "high_score": float(all_time_record),
-                        "looming_drive": float(inputs[leader_idx, 0]),
-                        "ground_hazard": float(inputs[leader_idx, 3])
-                    })
                 
                 if flaps[leader_idx] if leader_idx != -1 else False:
                     sound_fx.play_spike_click()
@@ -354,9 +341,10 @@ def run_simulation():
         
         # Update and Draw Brain Visualizer
         if leader and leader_idx != -1:
-            # We skip the legacy 2D visualizer to favor the WebGL Connectome Workbench
-            placeholder = font.render("3D WEBGL CONNECTOME ACTIVE", True, COLOR_ACCENT)
-            virtual_screen.blit(placeholder, (lab_x + 130, 350))
+            leader_inputs = inputs[leader_idx]
+            v = float(batched_snn.gf_v[leader_idx, 0])
+            spiked = bool(flaps[leader_idx])
+            brain_visualizer.update_and_draw(virtual_screen, leader_inputs, v, spiked)
         
         if replay_mode:
             mode_text = f"REPLAYING ALL-TIME CHAMPION (Record: {int(all_time_record)}) | Press [R] to Exit"
@@ -437,22 +425,25 @@ def run_simulation():
             
         curr_y = 20
         
+        current_pipes_cleared = leader.score if leader else 0
+        all_time_high_pipes = max(all_time_high_pipes, current_pipes_cleared)
+        
         # 1. SCORE & PROGRESSION
         score_h = 125
         draw_card_bg("SCORE & PROGRESSION", score_h, hud_x + 10, curr_y)
         
         lbl1 = font.render("CURRENT PIPES CLEARED", True, COLOR_TEXT)
         virtual_screen.blit(lbl1, (hud_x + 20, curr_y + 28))
-        val1 = huge_font.render(f"{int(current_score)}", True, (0, 255, 255))
+        val1 = huge_font.render(f"{int(current_pipes_cleared)}", True, (0, 255, 255))
         virtual_screen.blit(val1, (hud_x + 20, curr_y + 43))
         
         lbl2 = font.render("HIGH SCORE RECORD", True, COLOR_TEXT)
         virtual_screen.blit(lbl2, (hud_x + 20, curr_y + 82))
-        val2 = huge_font.render(f"{int(all_time_record)}", True, (255, 204, 0))
+        val2 = huge_font.render(f"{int(all_time_high_pipes)}", True, (255, 204, 0))
         virtual_screen.blit(val2, (hud_x + 20, curr_y + 97))
         
         surv_lbl = font.render("SWARM SURVIVAL:", True, COLOR_TEXT)
-        surv_val = font.render(f"Alive: {alive_count} / {len(world.agents)}", True, COLOR_PHOSPHOR)
+        surv_val = font.render(f"Alive {alive_count}/{GA_POPULATION_SIZE}", True, COLOR_PHOSPHOR)
         virtual_screen.blit(surv_lbl, (hud_x + 190, curr_y + 82))
         virtual_screen.blit(surv_val, (hud_x + 190, curr_y + 97))
         

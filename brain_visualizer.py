@@ -164,9 +164,9 @@ class BrainVisualizer:
         v_thresh = -50.0 
         gf_fill = np.clip((gf_v - v_rest) / (v_thresh - v_rest), 0.0, 1.0)
         
-        cyan_base = (0, 85, 119) # #005577
+        cyan_base = (0, 68, 102) # #004466
         cyan_glow = (0, 255, 255) # #00FFFF
-        amber_base = (119, 68, 0) # #774400
+        amber_base = (153, 92, 0) # Dimmed #FF9900
         amber_glow = (255, 204, 0) # #FFCC00
         crimson_base = (100, 20, 30)
         crimson_glow = (255, 51, 85) # #FF3355
